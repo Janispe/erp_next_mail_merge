@@ -404,8 +404,21 @@ export const App = () => {
   // Template-unabhängige Sidebar-Daten einmalig laden.
   useEffect(() => {
     loadBausteine().then(r => setBausteine(r.items || [])).catch(() => {});
-    loadRecipients().then(r => setRecipients(r.items || [])).catch(() => {});
   }, []);
+
+  // Zielobjekte haengen vom Haupt-Verteil-Objekt der geladenen Vorlage ab.
+  // Beim initialen Mount ist die Vorlage in der eingebetteten Ansicht noch leer;
+  // deshalb erst nach dem Template-Load bzw. bei Doctype-Wechsel laden.
+  useEffect(() => {
+    const dt = (template.haupt_verteil_objekt || "").trim();
+    if (!dt) {
+      setRecipients([]);
+      changeRecipient(null);
+      return;
+    }
+    loadRecipients(dt).then(r => setRecipients(r.items || [])).catch(() => setRecipients([]));
+    changeRecipient(null);
+  }, [template.haupt_verteil_objekt, changeRecipient]);
 
   // Platzhalter-Baum der aktuellen Vorlage laden (Objekt-Felder + Variablen + Referenzen).
   useEffect(() => {
