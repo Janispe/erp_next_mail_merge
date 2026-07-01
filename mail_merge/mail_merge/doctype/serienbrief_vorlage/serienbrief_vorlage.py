@@ -426,6 +426,8 @@ def _load_preview_profile_values(template_doc=None) -> tuple[dict[str, Any], dic
 
 
 class SplitPreviewUndefined(Undefined):
+	_mail_merge_preview_mock = True
+
 	def _path(self) -> str:
 		return cstr(getattr(self, "_undefined_name", "") or "").strip()
 
@@ -533,9 +535,14 @@ class SplitPreviewAddress:
 
 
 class SplitPreviewObject:
-	def __init__(self, contact: SplitPreviewContact, address: SplitPreviewAddress):
+	def __init__(
+		self,
+		contact: SplitPreviewContact,
+		address: SplitPreviewAddress,
+		doctype: str | None = None,
+	):
 		self._mail_merge_preview_mock = True
-		self.doctype = "Preview Object"
+		self.doctype = cstr(doctype or "").strip() or "DocType"
 		self.name = "PREVIEW-0001"
 		self.title = "Beispielobjekt"
 		self.contact = contact
@@ -543,10 +550,10 @@ class SplitPreviewObject:
 		self.address = address
 
 	def __getattr__(self, name):
-		return SplitPreviewUndefined(name=f"Preview Object.{name}")
+		return SplitPreviewUndefined(name=f"{self.doctype}.{name}")
 
 	def __getitem__(self, key):
-		return SplitPreviewUndefined(name=f"Preview Object.{key}")
+		return SplitPreviewUndefined(name=f"{self.doctype}.{key}")
 
 	def __bool__(self) -> bool:
 		return True
@@ -683,7 +690,8 @@ def _split_preview_context(druck_schwarz_weiss: bool = False, template_doc=None)
 			children=profile_tree,
 		)
 	else:
-		objekt = SplitPreviewObject(kontakt, address)
+		target_doctype = cstr(getattr(template_doc, "haupt_verteil_objekt", "") or "").strip()
+		objekt = SplitPreviewObject(kontakt, address, doctype=target_doctype)
 	context = {
 		"objekt": objekt,
 		"datum": "31.12.2024",

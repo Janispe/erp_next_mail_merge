@@ -2479,12 +2479,15 @@ class _LinkResolvingRow:
 	def __init__(self, source: Any):
 		object.__setattr__(self, "_source", source)
 		meta = None
-		try:
-			doctype = getattr(source, "doctype", None) or (source.get("doctype") if isinstance(source, dict) else None)
-			if doctype:
-				meta = frappe.get_meta(doctype)
-		except Exception:
-			meta = None
+		if not _is_mail_merge_preview_mock(source):
+			try:
+				doctype = getattr(source, "doctype", None) or (
+					source.get("doctype") if isinstance(source, dict) else None
+				)
+				if doctype:
+					meta = frappe.get_meta(doctype)
+			except Exception:
+				meta = None
 		object.__setattr__(self, "_meta", meta)
 
 	def __getattr__(self, key: str):
@@ -2636,6 +2639,14 @@ def _wrap_jinja_value(value: Any) -> Any:
 
 
 def _is_document_like(value: Any) -> bool:
+	if _is_mail_merge_preview_mock(value):
+		if isinstance(value, dict):
+			return bool(value.get("doctype"))
+		try:
+			data = object.__getattribute__(value, "__dict__")
+		except Exception:
+			data = {}
+		return isinstance(data, dict) and bool(data.get("doctype"))
 	if getattr(value, "doctype", None):
 		return True
 	return isinstance(value, dict) and bool(value.get("doctype"))
