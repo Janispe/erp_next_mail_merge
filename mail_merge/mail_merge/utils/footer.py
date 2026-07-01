@@ -8,10 +8,15 @@ from markupsafe import Markup
 
 
 FOOTER_STYLE = (
-	"width: 100%; padding: 1px 0 1px; border-top: 1px solid #000; "
+	"width: 100%; padding: 0 0 1px; "
 	"font-size: 6pt; color: #000 !important; text-align: center; "
 	"font-family: Arial, sans-serif; line-height: 1.05; height: 8mm; "
 	"min-height: 8mm; box-sizing: border-box;"
+)
+
+FOOTER_RULE_STYLE = (
+	"width: 100%; border-top: 1px solid #000; height: 0; "
+	"line-height: 0; font-size: 0; margin: 0 0 1px; padding: 0;"
 )
 
 FOOTER_ROW_STYLE = (
@@ -90,6 +95,7 @@ def render_template_path_footer(doc: Any | None = None) -> str:
 
 def render_document_footer_html(doc: Any | None = None) -> Markup:
 	rows: list[str] = []
+	rows.append(f'<div style="{FOOTER_RULE_STYLE}"></div>')
 	block_html = cstr(render_footer_blocks(doc)).strip()
 	if block_html:
 		rows.append(f'<div style="{FOOTER_ROW_STYLE}">{block_html}</div>')
