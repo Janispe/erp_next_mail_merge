@@ -1,0 +1,26 @@
+[project]
+name = "mail_merge"
+authors = [
+	{ name = "janis" }
+]
+description = "Generic mail merge core for Frappe"
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+dependencies = [
+	"frappe",
+	"PyPDF2>=3.0.1",
+	"pypdf>=5.8.0",
+	"pypdfium2>=4.30.0",
+	"reportlab>=4.4.2",
+]
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.flit.module]
+name = "mail_merge"
+
+[tool.bench.frappe-dependencies]
+frappe = ">=15.0.0"

@@ -1,0 +1,153 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2024-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_brand",
+  "hide_peters_logo",
+  "section_pdf_ranges",
+  "editor_print_format",
+  "margin_top",
+  "margin_right",
+  "column_break_margins",
+  "margin_bottom",
+  "margin_left",
+  "section_ui",
+  "picker_modal_width_vw",
+  "serienbrief_pdf_skip_dialog",
+  "serienbrief_pdf_default_format",
+  "section_pfade",
+  "standardpfade"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_brand",
+   "fieldtype": "Section Break",
+   "label": "Layout"
+  },
+  {
+   "default": "1",
+   "description": "Entfernt eingebettete Logo-Grafiken aus Serienbrief-Vorschau und Serienbrief-PDFs. Deaktivieren, wenn Vorlagen Logos ausgeben sollen.",
+   "fieldname": "hide_peters_logo",
+   "fieldtype": "Check",
+   "label": "Logos im Serienbrief ausblenden"
+  },
+  {
+   "fieldname": "section_pdf_ranges",
+   "fieldtype": "Section Break",
+   "label": "PDF-Seitenränder (Serienbrief Dokument)"
+  },
+  {
+   "default": "Serienbrief Dokument",
+   "description": "Print Format, dessen CSS im Serienbrief Editor für die gerenderte Baustein-Vorschau verwendet wird.",
+   "fieldname": "editor_print_format",
+   "fieldtype": "Link",
+   "label": "Editor Layout Print Format",
+   "options": "Print Format"
+  },
+  {
+   "default": "20",
+   "description": "Oberer Seitenrand in Millimetern. Default 20mm.",
+   "fieldname": "margin_top",
+   "fieldtype": "Float",
+   "label": "Oben (mm)",
+   "non_negative": 1,
+   "precision": "1"
+  },
+  {
+   "default": "20",
+   "description": "Rechter Seitenrand in Millimetern. Default 20mm.",
+   "fieldname": "margin_right",
+   "fieldtype": "Float",
+   "label": "Rechts (mm)",
+   "non_negative": 1,
+   "precision": "1"
+  },
+  {
+   "fieldname": "column_break_margins",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "16",
+   "description": "Unterer Seitenrand in Millimetern. Reserviert Platz für den Page-Footer. Default 16mm.",
+   "fieldname": "margin_bottom",
+   "fieldtype": "Float",
+   "label": "Unten (mm)",
+   "non_negative": 1,
+   "precision": "1"
+  },
+  {
+   "default": "25",
+   "description": "Linker Seitenrand in Millimetern. DIN-5008 sieht 25mm vor (Heftrand). Default 25mm.",
+   "fieldname": "margin_left",
+   "fieldtype": "Float",
+   "label": "Links (mm)",
+   "non_negative": 1,
+   "precision": "1"
+  },
+  {
+   "fieldname": "section_ui",
+   "fieldtype": "Section Break",
+   "label": "UI"
+  },
+  {
+   "default": "92",
+   "description": "Breite der Auswahl-Dialoge in Prozent der Browser-Breite. Default 92 (= 92vw). 0 oder leer = Frappe-Default.",
+   "fieldname": "picker_modal_width_vw",
+   "fieldtype": "Int",
+   "label": "Picker-Modal-Breite (% Viewport)"
+  },
+  {
+   "default": "1",
+   "description": "Wenn aktiv, wird beim Klick auf \"PDF erzeugen\" im Serienbrief Durchlauf der Format-Auswahl-Dialog übersprungen und direkt das Default-Format genutzt.",
+   "fieldname": "serienbrief_pdf_skip_dialog",
+   "fieldtype": "Check",
+   "label": "PDF-Erzeugen-Dialog überspringen"
+  },
+  {
+   "description": "Print Format, das beim PDF-Erzeugen verwendet wird (mit oder ohne übersprungenen Dialog).",
+   "fieldname": "serienbrief_pdf_default_format",
+   "fieldtype": "Link",
+   "label": "Default Print Format für Serienbrief-PDF",
+   "options": "Print Format"
+  },
+  {
+   "fieldname": "section_pfade",
+   "fieldtype": "Section Break",
+   "label": "Globale Standardpfade"
+  },
+  {
+   "fieldname": "standardpfade",
+   "fieldtype": "Table",
+   "label": "Globale Standardpfade",
+   "options": "Serienbrief Globaler Standardpfad"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-06-18 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Mail Merge",
+ "name": "Serienbrief Einstellungen",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

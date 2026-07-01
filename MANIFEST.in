@@ -1,0 +1,6 @@
+recursive-include mail_merge *.json
+recursive-include mail_merge *.js
+recursive-include mail_merge *.css
+recursive-include mail_merge *.html
+recursive-include mail_merge *.py
+recursive-include mail_merge/public *
