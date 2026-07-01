@@ -231,6 +231,200 @@ def _preview_value_from_path(path: str) -> str:
 	return "Beispielwert"
 
 
+def _preview_path_segments(path: str) -> list[str]:
+	segments: list[str] = []
+	for raw in [seg.strip() for seg in cstr(path or "").split(".") if seg.strip()]:
+		match = re.match(r"^([^\[\]]+)((?:\[[^\]]+\])*)$", raw)
+		if not match:
+			segments.append(raw)
+			continue
+		head = match.group(1).strip()
+		if head:
+			segments.append(head)
+		for idx in re.findall(r"\[([^\]]+)\]", match.group(2) or ""):
+			idx = idx.strip()
+			if idx:
+				segments.append(idx)
+	return segments
+
+
+def _coerce_preview_value(raw: Any, value_type: str | None) -> Any:
+	value_type = cstr(value_type or "Text").strip() or "Text"
+	if raw is None:
+		raw = ""
+	if value_type == "JSON":
+		text = cstr(raw).strip()
+		if not text:
+			return None
+		try:
+			return json.loads(text)
+		except Exception:
+			return text
+	if value_type == "Zahl":
+		text = cstr(raw).strip().replace(".", "").replace(",", ".")
+		if not text:
+			return 0
+		try:
+			number = float(text)
+		except Exception:
+			return raw
+		return int(number) if number.is_integer() else number
+	if value_type == "Bool":
+		return bool(cint(raw))
+	return cstr(raw)
+
+
+def _assign_preview_tree(container: dict | list, segments: list[str], value: Any) -> None:
+	if not segments:
+		return
+	head = segments[0]
+	last = len(segments) == 1
+
+	if isinstance(container, list):
+		if not head.isdigit():
+			return
+		idx = int(head)
+		while len(container) <= idx:
+			container.append(None)
+		if last:
+			container[idx] = value
+			return
+		next_is_index = segments[1].isdigit()
+		if not isinstance(container[idx], (dict, list)):
+			container[idx] = [] if next_is_index else {}
+		_assign_preview_tree(container[idx], segments[1:], value)
+		return
+
+	if last:
+		container[head] = value
+		return
+
+	next_is_index = segments[1].isdigit()
+	if head not in container or not isinstance(container[head], (dict, list)):
+		container[head] = [] if next_is_index else {}
+	_assign_preview_tree(container[head], segments[1:], value)
+
+
+class SplitPreviewNode:
+	def __init__(
+		self,
+		doctype: str | None = None,
+		name: str | None = None,
+		path: str | None = None,
+		children: dict[str, Any] | None = None,
+	):
+		self._mail_merge_preview_mock = True
+		self._preview_path = cstr(path or doctype or "objekt").strip() or "objekt"
+		self._children: dict[str, Any] = {}
+		self.doctype = doctype or "Preview Object"
+		self.name = name or "PREVIEW-0001"
+		for key, value in (children or {}).items():
+			key = cstr(key)
+			self._children[key] = _build_preview_node_value(
+				value,
+				f"{self._preview_path}.{key}" if self._preview_path else key,
+			)
+		if "doctype" in self._children:
+			self.doctype = cstr(self._children["doctype"] or self.doctype)
+		if "name" in self._children:
+			self.name = cstr(self._children["name"] or self.name)
+
+	def __getattr__(self, name):
+		if name in self._children:
+			return self._children[name]
+		return SplitPreviewUndefined(name=f"{self._preview_path}.{name}")
+
+	def __getitem__(self, key):
+		key = cstr(key)
+		if key in self._children:
+			return self._children[key]
+		return SplitPreviewUndefined(name=f"{self._preview_path}.{key}")
+
+	def get(self, key, default=None):
+		return self._children.get(cstr(key), default)
+
+	def as_dict(self) -> dict[str, Any]:
+		return {"doctype": self.doctype, "name": self.name, **self._children}
+
+	def __bool__(self) -> bool:
+		return True
+
+	def __str__(self) -> str:
+		title = self._children.get("title") or self._children.get("display_name")
+		return cstr(title or self.name or _preview_value_from_path(self._preview_path))
+
+	def __html__(self) -> str:
+		return str(self)
+
+
+def _build_preview_node_value(value: Any, path: str) -> Any:
+	if isinstance(value, dict):
+		doctype = cstr(value.get("doctype") or "").strip() or None
+		name = cstr(value.get("name") or "").strip() or None
+		return SplitPreviewNode(doctype=doctype, name=name, path=path, children=value)
+	if isinstance(value, list):
+		return [
+			_build_preview_node_value(item, f"{path}[{idx}]")
+			for idx, item in enumerate(value)
+		]
+	return value
+
+
+def _load_preview_profile_rows(template_doc=None) -> list[dict[str, Any]]:
+	if not template_doc or not frappe.db.exists("DocType", "Serienbrief Beispielobjekt"):
+		return []
+	target_doctype = cstr(getattr(template_doc, "haupt_verteil_objekt", "") or "").strip()
+	if not target_doctype:
+		return []
+	template_name = cstr(getattr(template_doc, "name", "") or "").strip()
+	try:
+		rows = frappe.get_all(
+			"Serienbrief Beispielobjekt",
+			filters={"enabled": 1, "target_doctype": target_doctype},
+			fields=["name", "template", "priority", "modified"],
+			order_by="priority desc, modified desc",
+			limit=50,
+		)
+	except Exception:
+		return []
+
+	exact = [row for row in rows if template_name and cstr(row.get("template")) == template_name]
+	generic = [row for row in rows if not cstr(row.get("template"))]
+	return exact or generic[:1]
+
+
+def _load_preview_profile_values(template_doc=None) -> tuple[dict[str, Any], dict[str, Any]]:
+	object_tree: dict[str, Any] = {}
+	context_values: dict[str, Any] = {}
+	rows = _load_preview_profile_rows(template_doc)
+	if not rows:
+		return object_tree, context_values
+
+	try:
+		profile = frappe.get_cached_doc("Serienbrief Beispielobjekt", rows[0]["name"])
+	except Exception:
+		return object_tree, context_values
+
+	for row in profile.get("werte") or []:
+		segments = _preview_path_segments(getattr(row, "pfad", None))
+		if not segments:
+			continue
+		value = _coerce_preview_value(getattr(row, "wert", None), getattr(row, "wert_typ", None))
+		root = segments[0]
+		if root in {"objekt", "__self__"}:
+			_assign_preview_tree(object_tree, segments[1:], value)
+		elif root in {"serienbrief", "outputs"}:
+			target = context_values.setdefault(root, {})
+			if isinstance(target, dict):
+				_assign_preview_tree(target, segments[1:], value)
+		elif root in {"datum", "datum_iso"}:
+			context_values[root] = value
+		else:
+			_assign_preview_tree(object_tree, segments, value)
+
+	return object_tree, context_values
+
+
 class SplitPreviewUndefined(Undefined):
 	def _path(self) -> str:
 		return cstr(getattr(self, "_undefined_name", "") or "").strip()
@@ -359,6 +553,7 @@ class SplitPreviewObject:
 
 
 _SPLIT_PREVIEW_MOCK_TYPES: tuple[type, ...] = (
+	SplitPreviewNode,
 	SplitPreviewUndefined,
 	SplitPreviewDummy,
 	SplitPreviewContact,
@@ -405,7 +600,26 @@ class SplitPreviewFrappeDB:
 		"set_value": None,
 	}
 
+	def __init__(self, preview_root=None):
+		self._preview_root = preview_root
+
+	def _value_from_preview_doc(self, doc, fieldname, as_dict: bool = False):
+		if doc is None or fieldname in (None, ""):
+			return None
+		if isinstance(fieldname, (list, tuple)):
+			values = {cstr(field): getattr(doc, cstr(field), None) for field in fieldname}
+			return frappe._dict(values) if as_dict else tuple(values.values())
+		value = getattr(doc, cstr(fieldname), None)
+		return frappe._dict({cstr(fieldname): value}) if as_dict else value
+
+	def get_value(self, doctype, filters=None, fieldname=None, *args, **kwargs):
+		if _has_split_preview_mock(filters):
+			return self._value_from_preview_doc(filters, fieldname, bool(kwargs.get("as_dict")))
+		return frappe.db.get_value(doctype, filters, fieldname, *args, **kwargs)
+
 	def __getattr__(self, name):
+		if name == "get_value":
+			return self.get_value
 		attr = getattr(frappe.db, name)
 		if not callable(attr) or name not in self._MOCK_DEFAULTS:
 			return attr
@@ -427,8 +641,9 @@ class SplitPreviewFrappeProxy:
 	durch zum echten ``frappe``.
 	"""
 
-	def __init__(self):
-		self._db = SplitPreviewFrappeDB()
+	def __init__(self, preview_root=None):
+		self._preview_root = preview_root
+		self._db = SplitPreviewFrappeDB(preview_root=preview_root)
 
 	def __getattr__(self, name):
 		if name == "get_doc":
@@ -442,20 +657,34 @@ class SplitPreviewFrappeProxy:
 		return getattr(frappe, name)
 
 	def get_doc(self, doctype, name=None, *args, **kwargs):
+		if _has_split_preview_mock(name):
+			return name
 		return SplitPreviewDummy(cstr(doctype), cstr(name) if name else None)
 
 	def get_cached_doc(self, doctype, name=None, *args, **kwargs):
+		if _has_split_preview_mock(name):
+			return name
 		return SplitPreviewDummy(cstr(doctype), cstr(name) if name else None)
 
 	def throw(self, msg=None, *args, **kwargs):
 		raise TemplateRuntimeError(cstr(msg or _("Preview-Fehler")))
 
 
-def _split_preview_context(druck_schwarz_weiss: bool = False) -> Dict[str, Any]:
+def _split_preview_context(druck_schwarz_weiss: bool = False, template_doc=None) -> Dict[str, Any]:
 	kontakt = SplitPreviewContact()
 	address = SplitPreviewAddress()
-	objekt = SplitPreviewObject(kontakt, address)
-	return {
+	profile_tree, context_values = _load_preview_profile_values(template_doc)
+	if profile_tree:
+		target_doctype = cstr(getattr(template_doc, "haupt_verteil_objekt", "") or "").strip()
+		objekt = SplitPreviewNode(
+			doctype=target_doctype or "Preview Object",
+			name=cstr(profile_tree.get("name") or "").strip() or "PREVIEW-0001",
+			path="objekt",
+			children=profile_tree,
+		)
+	else:
+		objekt = SplitPreviewObject(kontakt, address)
+	context = {
 		"objekt": objekt,
 		"datum": "31.12.2024",
 		"datum_iso": "2024-12-31",
@@ -473,11 +702,23 @@ def _split_preview_context(druck_schwarz_weiss: bool = False) -> Dict[str, Any]:
 		# Frappe-Proxy fuer Vorlagen, die ``frappe.db.get_all/get_value/exists/...``
 		# direkt aufrufen. Mit Mock-Args (z.B. ``filters={"x": objekt.parent}``)
 		# liefert der Proxy sichere Defaults statt zu crashen.
-		"frappe": SplitPreviewFrappeProxy(),
+		"frappe": SplitPreviewFrappeProxy(preview_root=objekt),
 	}
+	for key in ("datum", "datum_iso"):
+		if key in context_values:
+			context[key] = context_values[key]
+	if isinstance(context_values.get("serienbrief"), dict):
+		context["serienbrief"].update(context_values["serienbrief"])
+	if isinstance(context_values.get("outputs"), dict):
+		context["outputs"].update(context_values["outputs"])
+	return context
 
 
-def _render_split_preview_html(html: str, druck_schwarz_weiss: bool = False) -> str:
+def _render_split_preview_html(
+	html: str,
+	druck_schwarz_weiss: bool = False,
+	template_doc=None,
+) -> str:
 	"""Render with ``StrictUndefined`` als root-undefined, sodass eine im
 	Context fehlende Variable (Tippfehler in der Vorlage) sofort einen
 	Fehler wirft. Sub-Attribute auf den Beispiel-Klassen (SplitPreviewContact,
@@ -500,7 +741,10 @@ def _render_split_preview_html(html: str, druck_schwarz_weiss: bool = False) -> 
 	env = get_jenv().overlay(
 		undefined=StrictUndefined, finalize=_split_preview_finalize_value
 	)
-	ctx = _split_preview_context(druck_schwarz_weiss=druck_schwarz_weiss)
+	ctx = _split_preview_context(
+		druck_schwarz_weiss=druck_schwarz_weiss,
+		template_doc=template_doc,
+	)
 	sanitized = sanitize_richtext_jinja_source(html)
 	preprocessed = _preprocess_simple_paths(
 		sanitized, ctx, on_unresolvable=_split_preview_token_fallback
@@ -526,6 +770,7 @@ def _render_split_preview_source(
 	source: str,
 	extra_context: Dict[str, Any] | None = None,
 	druck_schwarz_weiss: bool = False,
+	template_doc=None,
 ) -> str:
 	"""Render a single Jinja source (baustein or standard text) with the split preview context,
 	optionally overlayed with preview defaults for the currently-rendered block.
@@ -549,7 +794,10 @@ def _render_split_preview_source(
 	env = get_jenv().overlay(
 		undefined=StrictUndefined, finalize=_split_preview_finalize_value
 	)
-	ctx = _split_preview_context(druck_schwarz_weiss=druck_schwarz_weiss)
+	ctx = _split_preview_context(
+		druck_schwarz_weiss=druck_schwarz_weiss,
+		template_doc=template_doc,
+	)
 	if extra_context:
 		ctx.update(extra_context)
 	sanitized = sanitize_richtext_jinja_source(source)
@@ -989,7 +1237,11 @@ def _build_split_preview_html(template_doc, druck_schwarz_weiss: bool = False) -
 	# überlagern Template-Defaults bei Namensgleichheit (Bausteine sind
 	# spezifischer als ihre umgebende Vorlage).
 	template_defaults = _preview_defaults_for_template(
-		template_doc, base_context=_split_preview_context(druck_schwarz_weiss=druck_schwarz_weiss)
+		template_doc,
+		base_context=_split_preview_context(
+			druck_schwarz_weiss=druck_schwarz_weiss,
+			template_doc=template_doc,
+		),
 	)
 
 	def render_block(block_name: str, wrap: bool = True) -> str:
@@ -1012,7 +1264,10 @@ def _build_split_preview_html(template_doc, druck_schwarz_weiss: bool = False) -
 			return ""
 		block_defaults = _preview_defaults_for_block(
 			block_doc,
-			base_context=_split_preview_context(druck_schwarz_weiss=druck_schwarz_weiss),
+			base_context=_split_preview_context(
+				druck_schwarz_weiss=druck_schwarz_weiss,
+				template_doc=template_doc,
+			),
 			template_doc=template_doc,
 		)
 		merged = {**template_defaults, **block_defaults}
@@ -1020,6 +1275,7 @@ def _build_split_preview_html(template_doc, druck_schwarz_weiss: bool = False) -
 			source,
 			extra_context=merged,
 			druck_schwarz_weiss=druck_schwarz_weiss,
+			template_doc=template_doc,
 		)
 		if not wrap:
 			return rendered
@@ -1041,6 +1297,7 @@ def _build_split_preview_html(template_doc, druck_schwarz_weiss: bool = False) -
 			standard_with_placeholders,
 			extra_context=template_defaults,
 			druck_schwarz_weiss=druck_schwarz_weiss,
+			template_doc=template_doc,
 		)
 
 		def _restore(match) -> str:
@@ -1066,6 +1323,7 @@ def _build_split_preview_html(template_doc, druck_schwarz_weiss: bool = False) -
 			standard_text,
 			extra_context=template_defaults,
 			druck_schwarz_weiss=druck_schwarz_weiss,
+			template_doc=template_doc,
 		)
 		if standard_text else ""
 	)
@@ -1467,7 +1725,8 @@ def render_editor_baustein_previews(
 			names.append(name)
 
 	template_defaults = _preview_defaults_for_template(
-		doc, base_context=_split_preview_context()
+		doc,
+		base_context=_split_preview_context(template_doc=doc),
 	)
 	previews: Dict[str, str] = {}
 	iter_dt = cstr(iteration_doctype or "").strip()
@@ -1540,12 +1799,13 @@ def render_editor_baustein_previews(
 			continue
 		block_defaults = _preview_defaults_for_block(
 			block_doc,
-			base_context=_split_preview_context(),
+			base_context=_split_preview_context(template_doc=doc),
 			template_doc=doc,
 		)
 		previews[name] = _render_split_preview_source(
 			block_source,
 			extra_context={**template_defaults, **block_defaults},
+			template_doc=doc,
 		)
 
 	return {"items": previews}
