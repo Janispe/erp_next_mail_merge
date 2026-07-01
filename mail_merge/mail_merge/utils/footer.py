@@ -37,6 +37,28 @@ def render_footer_extensions(doc: Any | None = None) -> Markup:
 	return Markup("\n".join(parts))
 
 
+def render_footer_blocks(doc: Any | None = None) -> Markup:
+	vorlage_name = cstr(getattr(doc, "vorlage", None) or "").strip()
+	if not vorlage_name:
+		return Markup("")
+	try:
+		if not frappe.db.exists("Serienbrief Vorlage", vorlage_name):
+			return Markup("")
+		template = frappe.get_cached_doc("Serienbrief Vorlage", vorlage_name)
+	except Exception:
+		return Markup("")
+
+	durchlauf = frappe.get_doc(
+		{
+			"doctype": "Serienbrief Durchlauf",
+			"vorlage": vorlage_name,
+			"iteration_doctype": cstr(getattr(doc, "iteration_doctype", None) or getattr(template, "haupt_verteil_objekt", None) or ""),
+			"date": getattr(doc, "date", None) or frappe.utils.today(),
+		}
+	)
+	return Markup(durchlauf.render_footer_blocks(template, footer_doc=doc))
+
+
 def render_template_path_footer(doc: Any | None = None) -> str:
 	vorlage_name = cstr(getattr(doc, "vorlage", None) or "").strip()
 	if not vorlage_name:
@@ -68,6 +90,10 @@ def render_template_path_footer(doc: Any | None = None) -> str:
 
 def render_document_footer_html(doc: Any | None = None) -> Markup:
 	rows: list[str] = []
+	block_html = cstr(render_footer_blocks(doc)).strip()
+	if block_html:
+		rows.append(f'<div style="{FOOTER_ROW_STYLE}">{block_html}</div>')
+
 	extension_html = cstr(render_footer_extensions(doc)).strip()
 	if extension_html:
 		rows.append(extension_html)

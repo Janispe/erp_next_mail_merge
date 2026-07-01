@@ -9,6 +9,7 @@
  "field_order": [
   "title",
   "content_type",
+  "render_position",
   "text_content",
   "html_content",
   "jinja_content",
@@ -38,6 +39,15 @@
    "in_list_view": 1,
    "label": "Inhaltstyp",
    "options": "Textbaustein (Rich Text)\nHTML + Jinja\nPDF Formular",
+   "reqd": 1
+  },
+  {
+   "default": "Body",
+   "fieldname": "render_position",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Renderposition",
+   "options": "Body\nFooter",
    "reqd": 1
   },
   {

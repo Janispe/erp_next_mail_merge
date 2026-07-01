@@ -428,6 +428,10 @@ def _get_template_template_source(template_doc) -> str:
 	return sanitize_richtext_jinja_source(cstr(getattr(template_doc, "content", "")).strip())
 
 
+def _is_footer_block(block_doc) -> bool:
+	return cstr(getattr(block_doc, "render_position", None) or "Body").strip() == "Footer"
+
+
 class SerienbriefDurchlauf(Document):
 	def on_update(self) -> None:
 		# Draft: kleine Läufe beim Save sofort rendern (snappy, alte UX). Große Läufe
@@ -1143,6 +1147,8 @@ class SerienbriefDurchlauf(Document):
 				block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", name)
 			except frappe.DoesNotExistError:
 				return Markup("")
+			if _is_footer_block(block_doc):
+				return Markup("")
 
 			block_row = next(
 				(
@@ -1221,6 +1227,8 @@ class SerienbriefDurchlauf(Document):
 				block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", block_row.baustein)
 			except frappe.DoesNotExistError:
 				frappe.throw(_("Der Textbaustein {0} existiert nicht mehr.").format(block_row.baustein))
+			if _is_footer_block(block_doc):
+				continue
 
 			block_key = self._get_block_key(block_doc, block_row, block_counts)
 			block_context = self._build_block_context(context, block_doc, block_row, block_key)
@@ -1233,6 +1241,59 @@ class SerienbriefDurchlauf(Document):
 			render_standard()
 
 		return segments
+
+	def render_footer_blocks(self, template, footer_doc=None) -> str:
+		if not template:
+			return ""
+
+		block_counts: dict[str, int] = {}
+		blocks: list[str] = []
+		context = self._build_footer_context(template, footer_doc)
+		for block_row in template.get("textbausteine") or []:
+			if not getattr(block_row, "baustein", None):
+				continue
+			try:
+				block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", block_row.baustein)
+			except frappe.DoesNotExistError:
+				continue
+			if not _is_footer_block(block_doc):
+				continue
+			block_key = self._get_block_key(block_doc, block_row, block_counts)
+			block_context = self._build_block_context(context, block_doc, block_row, block_key)
+			segment = self._render_block_segment(block_doc, block_context, wrap_html=False)
+			self._publish_block_outputs(context, block_context, block_doc, block_key)
+			if segment and segment.get("type") == "html":
+				html = cstr(segment.get("html") or "").strip()
+				if html:
+					blocks.append(html)
+		return "\n".join(blocks)
+
+	def _build_footer_context(self, template, footer_doc=None) -> Dict[str, Any]:
+		if frappe.flags.get("hv_serienbrief_split_preview"):
+			from mail_merge.mail_merge.doctype.serienbrief_vorlage.serienbrief_vorlage import (
+				_split_preview_context,
+			)
+
+			return _split_preview_context(
+				druck_schwarz_weiss=bool(getattr(self, "_druck_schwarz_weiss", False)),
+				template_doc=template,
+			)
+
+		iteration_doctype = cstr(
+			getattr(footer_doc, "iteration_doctype", None)
+			or getattr(self, "iteration_doctype", None)
+			or getattr(template, "haupt_verteil_objekt", None)
+			or ""
+		).strip()
+		objekt = cstr(getattr(footer_doc, "objekt", None) or "").strip()
+		row = frappe._dict(iteration_doctype=iteration_doctype, objekt=objekt)
+		if iteration_doctype and objekt:
+			try:
+				row._iteration_doc = frappe.get_cached_doc(iteration_doctype, objekt)
+			except Exception:
+				row._iteration_doc = None
+		requirements = _collect_template_requirements(template, iteration_doctype)
+		return self._build_context(row, 1, requirements, template, total=1, strict_variables=False)
 
 	def _get_block_key(self, block_doc, block_row=None, counts: dict[str, int] | None = None) -> str:
 		explicit = cstr(getattr(block_row, "baustein_key", None) or "").strip() if block_row else ""
