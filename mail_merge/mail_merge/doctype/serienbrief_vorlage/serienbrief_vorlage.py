@@ -1313,6 +1313,8 @@ def _build_split_preview_html(template_doc, druck_schwarz_weiss: bool = False) -
 			return rendered_blocks[idx] if 0 <= idx < len(rendered_blocks) else ""
 
 		body = re.sub(r"<!--HV_BLOCK_(\d+)-->", _restore, rendered_standard)
+		if rendered_blocks and body == rendered_standard and "hv-preview-error" in rendered_standard:
+			body = "\n".join([*rendered_blocks, rendered_standard])
 		if not body:
 			return ""
 		return f'<div class="serienbrief-block serienbrief-content" data-block="standardtext">{body}</div>'
