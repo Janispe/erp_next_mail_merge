@@ -1927,6 +1927,23 @@ def render_editor_footer_html(template: str | None = None) -> Dict[str, str]:
 	except Exception as exc:
 		return {"html": "", "error": cstr(exc)}
 
+	ephemeral = frappe.new_doc("Serienbrief Dokument")
+	ephemeral.vorlage = template_name
+	# iteration_doctype / objekt bewusst leer; App-spezifische Hooks können
+	# Preview-Aufrufe über das Split-Preview-Flag erkennen.
+
+	previous_flag = frappe.flags.get("hv_serienbrief_split_preview")
+	frappe.flags.hv_serienbrief_split_preview = True
+	try:
+		from mail_merge.mail_merge.utils.footer import render_document_footer_html
+
+		if "render_document_footer_html" in pf_html:
+			return {"html": cstr(render_document_footer_html(ephemeral)), "error": ""}
+	except Exception as exc:
+		return {"html": "", "error": cstr(exc)}
+	finally:
+		frappe.flags.hv_serienbrief_split_preview = previous_flag
+
 	# Footer-Block aus dem Print Format ziehen (install.py: <div id="footer-html"…>).
 	# Der Footer enthält verschachtelte <div>s (Bank-Zeile, Pfad-Zeile), daher
 	# Tag-Balancing statt non-greedy Regex: vom Anfangs-<div id="footer-html"> die
@@ -1949,11 +1966,6 @@ def render_editor_footer_html(template: str | None = None) -> Dict[str, str]:
 		depth += -1 if next_tag.group(1) else 1
 		cursor = next_tag.end()
 	footer_template = pf_html[start:cursor]
-
-	ephemeral = frappe.new_doc("Serienbrief Dokument")
-	ephemeral.vorlage = template_name
-	# iteration_doctype / objekt bewusst leer; App-spezifische Hooks können
-	# Preview-Aufrufe über das Split-Preview-Flag erkennen.
 
 	previous_flag = frappe.flags.get("hv_serienbrief_split_preview")
 	frappe.flags.hv_serienbrief_split_preview = True

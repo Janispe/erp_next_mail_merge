@@ -210,35 +210,12 @@ def _ensure_serienbrief_dokument_print_format(*, reason: str) -> None:
 			}
 		""").replace("__MAIL_MERGE_FONT_FAMILY__", serienbrief_font_family())
 
-		footer_html = """
-<div id="footer-html" style="width: 100%; padding: 1px 0 1px; border-top: 1px solid #000; font-size: 6pt; color: #000 !important; text-align: center; font-family: Arial, sans-serif; line-height: 1.05; height: 8mm; min-height: 8mm; box-sizing: border-box;">
-{%- set vorlage_name = doc.vorlage if doc and doc.vorlage else None -%}
-{%- set pfad_html = "" -%}
-{%- if vorlage_name and frappe.db.exists("Serienbrief Vorlage", vorlage_name) -%}
-{%- set vorlage_doc = frappe.get_cached_doc("Serienbrief Vorlage", vorlage_name) -%}
-{%- set ns = namespace(current=vorlage_doc.kategorie, chain=[]) -%}
-{%- for _ in range(20) -%}
-{%- if ns.current and frappe.db.exists("Serienbrief Kategorie", ns.current) -%}
-{%- set kat_doc = frappe.get_cached_doc("Serienbrief Kategorie", ns.current) -%}
-{%- set ns.chain = ns.chain + [kat_doc.title or ns.current] -%}
-{%- set ns.current = kat_doc.parent_serienbrief_kategorie -%}
-{%- else -%}
-{%- set ns.current = None -%}
-{%- endif -%}
-{%- endfor -%}
-{%- set pfad_parts = (ns.chain | reverse | list) + [vorlage_doc.title or vorlage_name] -%}
-{%- set pfad_html = pfad_parts | join(" / ") -%}
-{%- endif -%}
-{%- if pfad_html -%}<div style="font-size: 6pt !important; line-height: 1.05 !important; color: #000 !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ pfad_html }}</div>{%- endif -%}
-</div>
-"""
-
 		html = f"""<style>{css}</style>
 {{% if doc.docstatus == 0 %}}
 <div class="mail-merge-draft-watermark-layer"><div class="mail-merge-draft-watermark">DRAFT</div></div>
 {{% endif %}}
 {{{{ (doc.html or '') | safe }}}}
-{footer_html}"""
+{{{{ render_document_footer_html(doc) | safe }}}}"""
 
 		if frappe.db.exists("Print Format", name):
 			doc = frappe.get_doc("Print Format", name)

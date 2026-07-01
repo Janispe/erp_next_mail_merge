@@ -22,6 +22,7 @@ from frappe.utils import cint, cstr, format_date, now_datetime, today
 from frappe.utils.jinja import get_jenv
 
 from mail_merge.mail_merge.utils.pdf_engine import render_pdf as get_pdf
+from mail_merge.mail_merge.utils.footer import render_document_footer_html
 from mail_merge.mail_merge.utils.serienbrief_fonts import (
 	get_serienbrief_font_face_css,
 	serienbrief_font_family,
@@ -704,7 +705,13 @@ class SerienbriefDurchlauf(Document):
 				else:
 					t0 = time.monotonic()
 					preview_pages = self._render_segments_preview_pages(segments)
-					pdf_bytes = self._render_segments_pdf_bytes(segments)
+					footer_doc = frappe._dict(
+						vorlage=self.vorlage,
+						iteration_doctype=iteration_doctype,
+						objekt=objekt,
+						date=self.date,
+					)
+					pdf_bytes = self._render_segments_pdf_bytes(segments, footer_doc=footer_doc)
 					render_ms = int((time.monotonic() - t0) * 1000)
 					if not preview_pages and not pdf_bytes:
 						status = "Übersprungen"
@@ -802,7 +809,7 @@ class SerienbriefDurchlauf(Document):
 						cstr(getattr(doc, "html", None) or ""),
 						bool(getattr(self, "_druck_schwarz_weiss", False)),
 					)
-					pdf_bytes = get_pdf(self._wrap_html(html), options=self._default_pdf_options())
+					pdf_bytes = get_pdf(self._wrap_html(html, footer_doc=doc), options=self._default_pdf_options())
 
 				merger.append(BytesIO(pdf_bytes))
 				appended += 1
@@ -1358,7 +1365,7 @@ class SerienbriefDurchlauf(Document):
 			f'{_("PDF-Formular")}: {frappe.utils.escape_html(title)}{frappe.utils.escape_html(page_hint)}</div>'
 		)
 
-	def _render_segments_pdf_bytes(self, segments: list[Dict[str, Any]]) -> bytes:
+	def _render_segments_pdf_bytes(self, segments: list[Dict[str, Any]], footer_doc=None) -> bytes:
 		pdf_chunks: list[bytes] = []
 		html_buffer: list[str] = []
 
@@ -1369,7 +1376,10 @@ class SerienbriefDurchlauf(Document):
 			html_buffer.clear()
 			if not joined:
 				return
-			page_html = self._wrap_html(f'<div class="serienbrief-page">{joined}</div>')
+			page_html = self._wrap_html(
+				f'<div class="serienbrief-page">{joined}</div>',
+				footer_doc=footer_doc,
+			)
 			pdf_chunks.append(get_pdf(page_html, options=self._default_pdf_options()))
 
 		for segment in segments or []:
@@ -1936,7 +1946,7 @@ class SerienbriefDurchlauf(Document):
 	def _is_bk_mieter_print(self) -> bool:
 		return cstr(getattr(self, "iteration_doctype", "") or "").strip() == "Betriebskostenabrechnung Mieter"
 
-	def _wrap_html(self, body_html: str, paged_polyfill: bool = False) -> str:
+	def _wrap_html(self, body_html: str, paged_polyfill: bool = False, footer_doc=None) -> str:
 		# paged_polyfill: nur in Browser-Previews aktivieren, NICHT in der
 		# Chrome-PDF-Pipeline — Chrome paginiert nativ via @page, paged.js
 		# würde dort doppelt paginieren oder das Layout durcheinanderbringen.
@@ -1945,6 +1955,7 @@ class SerienbriefDurchlauf(Document):
 			if paged_polyfill
 			else ""
 		)
+		footer_html = render_document_footer_html(footer_doc or self)
 		return f"""<!DOCTYPE html>
 <html>
 	<head>
@@ -1954,6 +1965,7 @@ class SerienbriefDurchlauf(Document):
 	</head>
 	<body>
 		{body_html}
+		{footer_html}
 	</body>
 </html>"""
 

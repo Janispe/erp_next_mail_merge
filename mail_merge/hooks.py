@@ -12,6 +12,12 @@ app_include_js = [
 
 extend_bootinfo = "mail_merge.mail_merge.utils.placeholder_cache.extend_bootinfo"
 
+jinja = {
+	"methods": [
+		"mail_merge.mail_merge.utils.footer.render_document_footer_html",
+	],
+}
+
 after_migrate = [
 	"mail_merge.mail_merge.utils.placeholder_cache.bump_cache_version",
 	"mail_merge.install.ensure_serienbrief_settings_defaults",
