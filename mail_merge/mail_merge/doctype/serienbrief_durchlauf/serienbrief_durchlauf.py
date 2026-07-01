@@ -56,6 +56,10 @@ _OBJ_ATTR_RE = re.compile(r"^'([^']+) object' has no attribute '([^']+)'$")
 _VAR_UNDEFINED_RE = re.compile(r"^'([^']+)' is undefined$")
 
 
+def _is_mail_merge_preview_mock(value: Any) -> bool:
+	return bool(getattr(value, "_mail_merge_preview_mock", False))
+
+
 # Bis zu so vielen Objektn wird beim Draft-Save synchron gerendert (alte UX).
 # Größere Läufe laufen nur über den Hintergrund-Job (kein Save-Timeout).
 AUTO_RENDER_LIMIT = 25
@@ -2700,7 +2704,7 @@ def _resolve_value_path(path: str, context: Dict[str, Any]) -> Any:
 			if isinstance(current, dict):
 				doctype = current.get("doctype")
 				meta = None
-				if doctype:
+				if doctype and not _is_mail_merge_preview_mock(current):
 					try:
 						meta = frappe.get_meta(doctype)
 					except Exception:
@@ -2784,7 +2788,7 @@ def _resolve_value_path(path: str, context: Dict[str, Any]) -> Any:
 			# Follow Link/Table fields using DocType meta so Pfade aus dem Wizard funktionieren.
 			doctype = getattr(current, "doctype", None)
 			meta = None
-			if doctype:
+			if doctype and not _is_mail_merge_preview_mock(current):
 				try:
 					meta = frappe.get_meta(doctype)
 				except Exception:

@@ -12,7 +12,7 @@ from frappe.model.document import Document
 from frappe.utils import cint, cstr, pretty_date, strip_html_tags
 from frappe.utils.jinja import get_jenv
 from jinja2 import Undefined
-from jinja2.exceptions import TemplateError
+from jinja2.exceptions import TemplateError, TemplateRuntimeError
 
 # Wrapper, der Print-Settings → pdf_generator respektiert (Chrome bzw. wkhtmltopdf).
 # Muss derselbe sein wie im Serienbrief Durchlauf-Render, damit die Vorlagen-Preview
@@ -285,6 +285,7 @@ class SplitPreviewUndefined(Undefined):
 
 class SplitPreviewDummy:
 	def __init__(self, doctype: str | None = None, name: str | None = None):
+		self._mail_merge_preview_mock = True
 		self.doctype = doctype or "Dummy"
 		self.name = name or "DUMMY-0001"
 
@@ -300,6 +301,7 @@ class SplitPreviewDummy:
 
 class SplitPreviewContact:
 	def __init__(self):
+		self._mail_merge_preview_mock = True
 		self.doctype = "Contact"
 		self.name = "CONTACT-0001"
 		self.salutation = "Herr"
@@ -319,6 +321,7 @@ class SplitPreviewContact:
 
 class SplitPreviewAddress:
 	def __init__(self):
+		self._mail_merge_preview_mock = True
 		self.doctype = "Address"
 		self.name = "ADDR-0001"
 		self.address_line1 = "Tristanstr. 4"
@@ -337,6 +340,7 @@ class SplitPreviewAddress:
 
 class SplitPreviewObject:
 	def __init__(self, contact: SplitPreviewContact, address: SplitPreviewAddress):
+		self._mail_merge_preview_mock = True
 		self.doctype = "Preview Object"
 		self.name = "PREVIEW-0001"
 		self.title = "Beispielobjekt"
@@ -431,6 +435,8 @@ class SplitPreviewFrappeProxy:
 			return self.get_doc
 		if name == "get_cached_doc":
 			return self.get_cached_doc
+		if name == "throw":
+			return self.throw
 		if name == "db":
 			return self._db
 		return getattr(frappe, name)
@@ -440,6 +446,9 @@ class SplitPreviewFrappeProxy:
 
 	def get_cached_doc(self, doctype, name=None, *args, **kwargs):
 		return SplitPreviewDummy(cstr(doctype), cstr(name) if name else None)
+
+	def throw(self, msg=None, *args, **kwargs):
+		raise TemplateRuntimeError(cstr(msg or _("Preview-Fehler")))
 
 
 def _split_preview_context(druck_schwarz_weiss: bool = False) -> Dict[str, Any]:
