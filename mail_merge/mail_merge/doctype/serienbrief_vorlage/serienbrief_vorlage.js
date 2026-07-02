@@ -316,10 +316,44 @@ const hv_vorlage_extract_inline_blocks = (content) => {
 	return ordered;
 };
 
+let hv_footer_block_names = null;
+let hv_footer_block_names_promise = null;
+
+const hv_vorlage_load_footer_block_names = () => {
+	if (hv_footer_block_names instanceof Set) {
+		return Promise.resolve(hv_footer_block_names);
+	}
+	if (hv_footer_block_names_promise) {
+		return hv_footer_block_names_promise;
+	}
+	hv_footer_block_names_promise = frappe
+		.call({
+			method: "frappe.client.get_list",
+			args: {
+				doctype: "Serienbrief Textbaustein",
+				fields: ["name"],
+				filters: { render_position: "Footer" },
+				limit_page_length: 500,
+			},
+			quiet: true,
+		})
+		.then((r) => {
+			hv_footer_block_names = new Set((r.message || []).map((row) => row.name).filter(Boolean));
+			return hv_footer_block_names;
+		})
+		.catch(() => {
+			hv_footer_block_names_promise = null;
+			return null;
+		});
+	return hv_footer_block_names_promise;
+};
+
 const hv_vorlage_sync_textbausteine_from_content = (frm) => {
 	const content = hv_get_live_template_source(frm);
 	const blockNames = hv_vorlage_extract_inline_blocks(content);
 	const currentRows = Array.isArray(frm.doc.textbausteine) ? frm.doc.textbausteine : [];
+	const footerBlocksLoaded = hv_footer_block_names instanceof Set;
+	const isFooterBlock = (block) => footerBlocksLoaded && hv_footer_block_names.has(block);
 
 	// Wichtig: Wenn der Content KEINE Inline-Token-Referenzen hat
 	// (`{{ baustein("X") }}`), sind wir im Listen-Modus — die Tabelle ist
@@ -339,6 +373,7 @@ const hv_vorlage_sync_textbausteine_from_content = (frm) => {
 			const block = (row?.baustein || "").trim();
 			if (!block) return;
 			if (keep.has(block)) return;
+			if (!footerBlocksLoaded || isFooterBlock(block)) return;
 			const gridRow = grid.grid_rows_by_docname[row.name];
 			if (gridRow && typeof gridRow.remove === "function") {
 				gridRow.remove();
@@ -349,7 +384,7 @@ const hv_vorlage_sync_textbausteine_from_content = (frm) => {
 		// Fallback: filter client-side (less ideal, but avoids crashes if grid is unavailable).
 		const next = (currentRows || []).filter((row) => {
 			const block = (row?.baustein || "").trim();
-			return !block || keep.has(block);
+			return !block || keep.has(block) || !footerBlocksLoaded || isFooterBlock(block);
 		});
 		if (next.length !== (currentRows || []).length) {
 			frm.doc.textbausteine = next;
@@ -397,15 +432,26 @@ const hv_vorlage_open_block_picker = (frm) => {
 				reqd: 1,
 			},
 		],
-		(values) => {
+		async (values) => {
 			const blockName = (values?.baustein || "").trim();
 			if (!blockName) return;
 
+			const footerBlocks = await hv_vorlage_load_footer_block_names();
 			const existing = new Set((frm.doc.textbausteine || []).map((r) => r.baustein).filter(Boolean));
 			if (!existing.has(blockName)) {
 				const row = frm.add_child("textbausteine");
 				row.baustein = blockName;
 				frm.refresh_field("textbausteine");
+			}
+
+			if (footerBlocks?.has(blockName)) {
+				hv_update_block_requirements(frm);
+				hv_schedule_split_preview(frm);
+				frappe.show_alert({
+					message: __("Footer-Baustein wurde zur Tabelle hinzugefügt."),
+					indicator: "blue",
+				});
+				return;
 			}
 
 			insert_placeholder(frm, `{{ baustein("${blockName}") }}`);
@@ -2433,6 +2479,9 @@ refresh(frm) {
 		)
 	);
 	append_placeholder_panel(frm);
+	hv_vorlage_load_footer_block_names().then(() => {
+		hv_vorlage_sync_textbausteine_from_content(frm);
+	});
 	hv_vorlage_sync_textbausteine_from_content(frm);
 	hv_vorlage_toggle_block_position_ui(frm);
 	// Textbausteine-Tabelle standardmäßig sichtbar; Sichtbarkeit folgt den
