@@ -432,6 +432,19 @@ def _is_footer_block(block_doc) -> bool:
 	return cstr(getattr(block_doc, "render_position", None) or "Body").strip() == "Footer"
 
 
+def _extract_inline_block_names(source: str) -> list[str]:
+	names: list[str] = []
+	seen: set[str] = set()
+	pattern = re.compile(r"\{\{\s*(?:baustein|textbaustein)\(\s*['\"]([^'\"]+)['\"]\s*\)\s*\}\}")
+	for match in pattern.finditer(source or ""):
+		name = cstr(match.group(1)).strip()
+		if not name or name in seen:
+			continue
+		seen.add(name)
+		names.append(name)
+	return names
+
+
 class SerienbriefDurchlauf(Document):
 	def on_update(self) -> None:
 		# Draft: kleine Läufe beim Save sofort rendern (snappy, alte UX). Große Läufe
@@ -1249,11 +1262,23 @@ class SerienbriefDurchlauf(Document):
 		block_counts: dict[str, int] = {}
 		blocks: list[str] = []
 		context = self._build_footer_context(template, footer_doc)
+		footer_refs: list[tuple[str, Any]] = []
+		seen_blocks: set[str] = set()
+
+		for block_name in _extract_inline_block_names(_get_template_template_source(template)):
+			footer_refs.append((block_name, None))
+			seen_blocks.add(block_name)
+
 		for block_row in template.get("textbausteine") or []:
-			if not getattr(block_row, "baustein", None):
+			block_name = cstr(getattr(block_row, "baustein", None) or "").strip()
+			if not block_name or block_name in seen_blocks:
 				continue
+			footer_refs.append((block_name, block_row))
+			seen_blocks.add(block_name)
+
+		for block_name, block_row in footer_refs:
 			try:
-				block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", block_row.baustein)
+				block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", block_name)
 			except frappe.DoesNotExistError:
 				continue
 			if not _is_footer_block(block_doc):

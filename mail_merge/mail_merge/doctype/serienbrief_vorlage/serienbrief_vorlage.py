@@ -1165,6 +1165,9 @@ def _build_raw_template_html(template_doc) -> str:
 	content_position = cstr(getattr(template_doc, "content_position", "")).strip() or "Nach Bausteinen"
 	inline_mode = bool(standard_text and ("baustein(" in standard_text or "textbaustein(" in standard_text))
 
+	def is_footer_block(block_doc) -> bool:
+		return cstr(getattr(block_doc, "render_position", None) or "Body").strip() == "Footer"
+
 	def render_raw_block(block_name: str) -> str:
 		name = cstr(block_name).strip()
 		if not name:
@@ -1173,6 +1176,8 @@ def _build_raw_template_html(template_doc) -> str:
 		try:
 			block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", name)
 		except frappe.DoesNotExistError:
+			return ""
+		if is_footer_block(block_doc):
 			return ""
 
 		template_source = _get_block_template_source(block_doc).strip()
@@ -1252,6 +1257,9 @@ def _build_split_preview_html(template_doc, druck_schwarz_weiss: bool = False) -
 		),
 	)
 
+	def is_footer_block(block_doc) -> bool:
+		return cstr(getattr(block_doc, "render_position", None) or "Body").strip() == "Footer"
+
 	def render_block(block_name: str, wrap: bool = True) -> str:
 		# wrap=False: rendert nur den nackten Baustein-Inhalt — für Inline-Substitution
 		# in einer ``{{ baustein("…") }}``-Vorlage. Der ``<div class="serienbrief-block">``
@@ -1266,6 +1274,8 @@ def _build_split_preview_html(template_doc, druck_schwarz_weiss: bool = False) -
 		try:
 			block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", name)
 		except frappe.DoesNotExistError:
+			return ""
+		if is_footer_block(block_doc):
 			return ""
 		source = _get_block_template_source(block_doc).strip()
 		if not source:

@@ -436,22 +436,12 @@ const hv_vorlage_open_block_picker = (frm) => {
 			const blockName = (values?.baustein || "").trim();
 			if (!blockName) return;
 
-			const footerBlocks = await hv_vorlage_load_footer_block_names();
+			await hv_vorlage_load_footer_block_names();
 			const existing = new Set((frm.doc.textbausteine || []).map((r) => r.baustein).filter(Boolean));
 			if (!existing.has(blockName)) {
 				const row = frm.add_child("textbausteine");
 				row.baustein = blockName;
 				frm.refresh_field("textbausteine");
-			}
-
-			if (footerBlocks?.has(blockName)) {
-				hv_update_block_requirements(frm);
-				hv_schedule_split_preview(frm);
-				frappe.show_alert({
-					message: __("Footer-Baustein wurde zur Tabelle hinzugefügt."),
-					indicator: "blue",
-				});
-				return;
 			}
 
 			insert_placeholder(frm, `{{ baustein("${blockName}") }}`);
