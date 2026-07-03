@@ -5,6 +5,7 @@ import {
   loadDurchlauf,
   getProgress,
   startRun,
+  submitDurchlauf,
   markFailed,
   saveVariables,
   addRecipients as apiAddRecipients,
@@ -26,6 +27,7 @@ const Header = ({
   durchlauf,
   stats,
   onRun,
+  onSubmit,
   onMergedPdf,
   onMarkFailed,
   onTitleCommit,
@@ -80,6 +82,14 @@ const Header = ({
           <button className="btn" onClick={onRun} disabled={running || busy || !durchlauf.can_write}>
             <Icon name="refresh" size={13}/> {running ? "Läuft…" : "Lauf starten / neu rendern"}
           </button>
+          <button
+            className="btn primary"
+            onClick={onSubmit}
+            disabled={running || busy || !durchlauf.can_submit || stats.total === 0}
+            title="Erzeugt den finalen Snapshot und reicht den Durchlauf ein"
+          >
+            <Icon name="check" size={13}/> Einreichen
+          </button>
           {running && durchlauf.can_write && (
             <button
               className="btn"
@@ -93,7 +103,7 @@ const Header = ({
           <button className="btn" onClick={onMergedPdf} disabled={running || busy || stats.generated === 0}>
             <Icon name="download" size={13}/> Sammel-PDF
           </button>
-          <button className="btn primary" disabled title="E-Mail-Versand kommt in Phase 2">
+          <button className="btn" disabled title="E-Mail-Versand kommt in Phase 2">
             <Icon name="send" size={13}/> E-Mails senden
           </button>
         </div>
@@ -664,7 +674,7 @@ const DetailPane = ({ r, durchlauf, overrides, onSetOverride, onClearOverrides, 
 
 // ============== Durchlauf-Viewer (bestehender Durchlauf) ==============
 const DurchlaufApp = () => {
-  const [durchlaufMeta, setDurchlaufMeta] = useState({ id: "", title: "", status: "draft", vorlage: { title: "", kategorie: "" }, iteration_doctype: "", date: "", created_by: "", can_write: true });
+  const [durchlaufMeta, setDurchlaufMeta] = useState({ id: "", title: "", status: "draft", vorlage: { title: "", kategorie: "" }, iteration_doctype: "", date: "", created_by: "", docstatus: 0, can_write: true, can_submit: false });
   const [recipients, setRecipients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -713,15 +723,25 @@ const DurchlaufApp = () => {
 
   // --- Variablen speichern (debounced) ------------------------------------
   const saveTimer = useRef(null);
+  const persistVariables = useCallback((nextVars, nextOverrides) => {
+    return saveVariables(
+      (nextVars || []).map((v) => ({ name: v.name, value: v.value })),
+      nextOverrides || {},
+    );
+  }, []);
   const scheduleSave = useCallback((nextVars, nextOverrides) => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      saveVariables(
-        (nextVars || []).map((v) => ({ name: v.name, value: v.value })),
-        nextOverrides || {},
-      ).catch(() => {});
+      persistVariables(nextVars, nextOverrides).catch(() => {});
     }, 600);
-  }, []);
+  }, [persistVariables]);
+  const flushVariableSave = useCallback(async () => {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    await persistVariables(vars, perRecipientOverrides);
+  }, [persistVariables, vars, perRecipientOverrides]);
 
   const onUpdateVar = (name, value) => {
     setVars((prev) => {
@@ -815,6 +835,26 @@ const DurchlaufApp = () => {
       setBusy(false);
     }
   }, [druckSchwarzWeiss, refresh, durchlauf.supports_druck_schwarz_weiss]);
+
+  const onSubmit = useCallback(async () => {
+    if (running || !durchlauf.can_submit) return;
+    const ok = window.confirm(
+      "Durchlauf einreichen?\n\nDer finale Snapshot wird neu erzeugt. Erfolgreiche Serienbrief-Dokumente werden ebenfalls eingereicht. Danach ist der Durchlauf schreibgeschützt."
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await flushVariableSave();
+      await submitDurchlauf({
+        druckSchwarzWeiss: durchlauf.supports_druck_schwarz_weiss && druckSchwarzWeiss,
+      });
+      await refresh();
+    } catch (e) {
+      window.alert(e?.message || "Einreichen fehlgeschlagen.");
+    } finally {
+      setBusy(false);
+    }
+  }, [running, durchlauf.can_submit, durchlauf.supports_druck_schwarz_weiss, druckSchwarzWeiss, flushVariableSave, refresh]);
 
   // Manueller Reset: bricht das Polling, setzt running=false und refresht den Doc,
   // damit Status/Counts vom Backend kommen. Backend prüft status === "Läuft" +
@@ -960,6 +1000,7 @@ const DurchlaufApp = () => {
         durchlauf={durchlauf}
         stats={stats}
         onRun={onRun}
+        onSubmit={onSubmit}
         onMergedPdf={onMergedPdf}
         onMarkFailed={onMarkFailed}
         onTitleCommit={onTitleCommit}

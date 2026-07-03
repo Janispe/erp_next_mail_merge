@@ -3786,6 +3786,28 @@ def generate_html(docname: str) -> str:
 
 
 @frappe.whitelist()
+def submit_durchlauf(docname: str, druck_schwarz_weiss: int | str = 0) -> Dict[str, Any]:
+	doc = frappe.get_doc("Serienbrief Durchlauf", docname)
+	if not frappe.has_permission("Serienbrief Durchlauf", "submit", doc):
+		raise frappe.PermissionError
+	if int(getattr(doc, "docstatus", 0) or 0) != 0:
+		frappe.throw(_("Der Durchlauf ist bereits abgeschlossen (eingereicht)."))
+	if cstr(doc.get("status") or "") == "Läuft":
+		frappe.throw(_("Der Durchlauf läuft gerade. Bitte warten Sie, bis der Lauf abgeschlossen ist."))
+
+	doc._druck_schwarz_weiss = bool(cint(druck_schwarz_weiss or 0))
+	doc.submit()
+	counts = getattr(doc, "_last_run_counts", None)
+	update_values: Dict[str, Any] = {"status": "Generiert", "last_run_on": now_datetime()}
+	if counts:
+		update_values["run_summary"] = json.dumps(counts)
+		update_values["progress"] = f"{counts.get('total', 0)}/{counts.get('total', 0)}"
+	frappe.db.set_value("Serienbrief Durchlauf", docname, update_values, update_modified=False)
+	frappe.db.commit()
+	return {"docname": docname, "docstatus": 1, "status": "Generiert", "counts": counts or {}}
+
+
+@frappe.whitelist()
 def regenerate_dokumente(docname: str, submit_documents: int | str = 0) -> list[str]:
 	durchlauf = frappe.get_doc("Serienbrief Durchlauf", docname)
 	if not frappe.has_permission("Serienbrief Durchlauf", "write", durchlauf):
@@ -4097,6 +4119,8 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 		"docstatus": int(getattr(doc, "docstatus", 0) or 0),
 		"supports_druck_schwarz_weiss": supports_druck_schwarz_weiss,
 		"can_write": bool(frappe.has_permission("Serienbrief Durchlauf", "write", doc))
+		and int(getattr(doc, "docstatus", 0) or 0) == 0,
+		"can_submit": bool(frappe.has_permission("Serienbrief Durchlauf", "submit", doc))
 		and int(getattr(doc, "docstatus", 0) or 0) == 0,
 		"variables": variables_out,
 		"per_recipient_overrides": overrides_out,

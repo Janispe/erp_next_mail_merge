@@ -16,6 +16,7 @@ const RPC_ACTIONS = {
 	durchlauf_data: HV_DL + "get_durchlauf_data",
 	run_progress: HV_DL + "get_run_progress",
 	start_run: HV_DL + "start_durchlauf_run",
+	submit_durchlauf: HV_DL + "submit_durchlauf",
 	set_variables: HV_DL + "set_run_variables",
 	add_recipients: HV_DL + "add_recipients",
 	remove_recipients: HV_DL + "remove_recipients",

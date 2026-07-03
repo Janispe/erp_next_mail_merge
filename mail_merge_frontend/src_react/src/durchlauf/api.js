@@ -83,7 +83,9 @@ export async function loadDurchlauf() {
 		iteration_doctype: d.iteration_doctype || "",
 		date: d.date || "",
 		created_by: d.created_by || "",
+		docstatus: Number(d.docstatus || 0),
 		can_write: !!d.can_write,
+		can_submit: !!d.can_submit,
 		supports_druck_schwarz_weiss: !!d.supports_druck_schwarz_weiss,
 		counts: d.counts || {},
 		variables: (d.variables || []).map((v) => ({
@@ -114,6 +116,15 @@ export async function getProgress() {
 export async function startRun({ druckSchwarzWeiss = false } = {}) {
 	if (!embedded) return { status: "Läuft", mock: true };
 	return await rpc("start_run", {
+		docname: getDocname(),
+		druck_schwarz_weiss: druckSchwarzWeiss ? 1 : 0,
+	});
+}
+
+// Final einreichen: rendert den finalen Snapshot und submitted den Durchlauf.
+export async function submitDurchlauf({ druckSchwarzWeiss = false } = {}) {
+	if (!embedded) return { docstatus: 1, mock: true };
+	return await rpc("submit_durchlauf", {
 		docname: getDocname(),
 		druck_schwarz_weiss: druckSchwarzWeiss ? 1 : 0,
 	});
