@@ -6,6 +6,7 @@ import os
 import re
 import time
 import uuid
+from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
 from typing import Any, Dict, List
@@ -18,7 +19,7 @@ from markupsafe import Markup
 from frappe import _
 from frappe.contacts.doctype.address.address import get_default_address
 from frappe.model.document import Document
-from frappe.utils import cint, cstr, format_date, now_datetime, today
+from frappe.utils import cint, cstr, format_date, formatdate, now_datetime, today
 from frappe.utils.jinja import get_jenv
 
 from mail_merge.mail_merge.utils.pdf_engine import render_pdf as get_pdf
@@ -136,6 +137,31 @@ def _humanize_jinja_error(raw: str) -> str:
 
 
 _OUTPUT_EXPR_RE = re.compile(r"\{\{\s*(.+?)\s*\}\}", re.DOTALL)
+_DATE_FIELDNAMES = {"creation", "modified"}
+
+
+class _SerienbriefDateValue(str):
+	"""String-compatible marker for date fields that should render as dd.MM.yyyy."""
+
+	__slots__ = ("raw_value",)
+
+	def __new__(cls, value: Any):
+		obj = str.__new__(cls, cstr(value))
+		object.__setattr__(obj, "raw_value", value)
+		return obj
+
+
+def _is_serienbrief_date_field(df: Any = None, fieldname: str | None = None) -> bool:
+	fieldtype = cstr(getattr(df, "fieldtype", None) or "").strip()
+	return fieldtype in {"Date", "Datetime"} or cstr(fieldname or "").strip() in _DATE_FIELDNAMES
+
+
+def _wrap_serienbrief_date_value(value: Any, df: Any = None, fieldname: str | None = None) -> Any:
+	if value in (None, ""):
+		return value
+	if not _is_serienbrief_date_field(df, fieldname):
+		return value
+	return _SerienbriefDateValue(value)
 
 
 def _extract_output_expressions_on_line(source: str, lineno: int) -> list[str]:
@@ -171,10 +197,29 @@ def _strict_finalize(value):
 	"""
 	if value is None:
 		raise UndefinedError("Wert ist None")
+	formatted_date = _format_serienbrief_date(value)
+	if formatted_date is not None:
+		return formatted_date
 	formatted = _format_serienbrief_number(value)
 	if formatted is not None:
 		return formatted
 	return value
+
+
+def _format_serienbrief_date(value: Any) -> str | None:
+	if isinstance(value, _SerienbriefDateValue):
+		raw_value = object.__getattribute__(value, "raw_value")
+	elif isinstance(value, datetime):
+		raw_value = value.date()
+	elif isinstance(value, date):
+		raw_value = value
+	else:
+		return None
+
+	try:
+		return formatdate(raw_value, "dd.MM.yyyy")
+	except Exception:
+		return cstr(raw_value)
 
 
 def _format_serienbrief_number(value: Any) -> str | None:
@@ -2363,6 +2408,9 @@ def _get_value_override(context: Dict[str, Any], key: str) -> Any:
 def _display_value(value: Any) -> Any:
 	if hasattr(value, "doctype") and getattr(value, "name", None):
 		return value.name
+	formatted_date = _format_serienbrief_date(value)
+	if formatted_date is not None:
+		return formatted_date
 	formatted = _format_serienbrief_number(value)
 	if formatted is not None:
 		return formatted
@@ -2537,6 +2585,10 @@ class _LinkResolvingRow:
 				return _LinkResolvingValue(df.options, value)
 			if df and df.fieldtype == "Table" and isinstance(value, (list, tuple)):
 				return [_LinkResolvingRow(row) if _is_document_like(row) else row for row in value]
+			if _is_serienbrief_date_field(df, key):
+				return _wrap_serienbrief_date_value(value, df, key)
+		elif key in _DATE_FIELDNAMES:
+			return _wrap_serienbrief_date_value(value, None, key)
 
 		# Sub-Docs/Dicts auch wrappen, damit Properties mit Sub-Docs tiefer
 		# aufgelöst werden können.
@@ -2846,6 +2898,18 @@ def _resolve_value_path(path: str, context: Dict[str, Any]) -> Any:
 						if consumed_numeric:
 							idx += 1
 						continue
+					if _is_serienbrief_date_field(df, segment):
+						current = _wrap_serienbrief_date_value(current.get(segment), df, segment)
+						if current is None:
+							return None
+						idx += 1
+						continue
+				elif segment in _DATE_FIELDNAMES:
+					current = _wrap_serienbrief_date_value(current.get(segment), None, segment)
+					if current is None:
+						return None
+					idx += 1
+					continue
 				current = current.get(segment)
 				if current is None:
 					return None
@@ -2938,6 +3002,27 @@ def _resolve_value_path(path: str, context: Dict[str, Any]) -> Any:
 						if consumed_numeric:
 							idx += 1
 						continue
+
+				if _is_serienbrief_date_field(df if meta else None, segment):
+					current = _wrap_serienbrief_date_value(
+						getattr(current, segment, None),
+						df if meta else None,
+						segment,
+					)
+					if current is None:
+						return None
+					idx += 1
+					continue
+				elif segment in _DATE_FIELDNAMES:
+					current = _wrap_serienbrief_date_value(
+						getattr(current, segment, None),
+						None,
+						segment,
+					)
+					if current is None:
+						return None
+					idx += 1
+					continue
 
 			current = _dig_attr(current, segment)
 			if current is None:
