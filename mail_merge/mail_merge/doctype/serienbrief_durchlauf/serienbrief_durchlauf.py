@@ -141,7 +141,7 @@ _DATE_FIELDNAMES = {"creation", "modified"}
 
 
 class _SerienbriefDateValue(str):
-	"""String-compatible marker for date fields that should render as dd.MM.yyyy."""
+	"""String-compatible marker for date fields that should render in system format."""
 
 	__slots__ = ("raw_value",)
 
@@ -217,7 +217,7 @@ def _format_serienbrief_date(value: Any) -> str | None:
 		return None
 
 	try:
-		return formatdate(raw_value, "dd.MM.yyyy")
+		return formatdate(raw_value)
 	except Exception:
 		return cstr(raw_value)
 
