@@ -47,6 +47,8 @@ export async function loadTemplate(id) {
 		bausteinPaths: t.baustein_pfade || {},
 		// Pro-Baustein Werte (Text / Bool): { "<Baustein>": { "<Variable>": <Wert> } }
 		bausteinValues: t.baustein_werte || {},
+		// Pro-Baustein Output-Key: { "<Baustein>": "<baustein_key>" }
+		bausteinKeys: t.baustein_keys || {},
 		// Vorlagen-Variablen (Definition + Wert/Pfad), im Editor bearbeitbar.
 		variables: t.variables || [],
 		blocks: [],
@@ -101,11 +103,13 @@ export async function openBrowser() {
 // Editierten Inhalt zurück in die Vorlage speichern. Gibt { id, modified } zurück.
 // bausteinPaths = Pro-Baustein Input-Pfad-Overrides (Doctype-Variablen).
 // bausteinValues = Pro-Baustein Werte für Text-/Bool-Variablen (selbes Format).
+// bausteinKeys = Pro-Baustein Output-Key (Serienbrief Vorlagenbaustein.baustein_key).
 export async function saveTemplate(
 	id,
 	html,
 	bausteinPaths,
 	bausteinValues,
+	bausteinKeys,
 	variables,
 	title,
 ) {
@@ -117,6 +121,7 @@ export async function saveTemplate(
 		html,
 		baustein_pfade: JSON.stringify(bausteinPaths || {}),
 		baustein_werte: JSON.stringify(bausteinValues || {}),
+		baustein_keys: JSON.stringify(bausteinKeys || {}),
 		variables: JSON.stringify(variables || []),
 	};
 	if (title != null) params.title = title;
@@ -218,6 +223,7 @@ export async function renderPreview({
 	variables,
 	bausteinPaths,
 	bausteinValues,
+	bausteinKeys,
 	previewValues,
 	druckSchwarzWeiss,
 }) {
@@ -229,6 +235,7 @@ export async function renderPreview({
 	if (variables != null) params.variables = JSON.stringify(variables);
 	if (bausteinPaths != null) params.baustein_pfade = JSON.stringify(bausteinPaths);
 	if (bausteinValues != null) params.baustein_werte = JSON.stringify(bausteinValues);
+	if (bausteinKeys != null) params.baustein_keys = JSON.stringify(bausteinKeys);
 	// Transiente Vorschau-Werte für Eingabe-Variablen (nicht gespeichert).
 	if (previewValues && Object.keys(previewValues).length) {
 		params.preview_values = JSON.stringify(previewValues);
@@ -255,6 +262,7 @@ export async function renderBausteinPreviews({
 	variables,
 	bausteinPaths,
 	bausteinValues,
+	bausteinKeys,
 	previewValues,
 }) {
 	if (!embedded) return { items: {} };
@@ -263,6 +271,7 @@ export async function renderBausteinPreviews({
 	if (variables != null) params.variables = JSON.stringify(variables);
 	if (bausteinPaths != null) params.baustein_pfade = JSON.stringify(bausteinPaths);
 	if (bausteinValues != null) params.baustein_werte = JSON.stringify(bausteinValues);
+	if (bausteinKeys != null) params.baustein_keys = JSON.stringify(bausteinKeys);
 	if (previewValues && Object.keys(previewValues).length) {
 		params.preview_values = JSON.stringify(previewValues);
 	}

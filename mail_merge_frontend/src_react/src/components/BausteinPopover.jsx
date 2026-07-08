@@ -11,6 +11,14 @@ function isDoctypeInput(inp) {
 	return t && !VALUE_TYPES.has(t);
 }
 
+function scrubKey(value) {
+	return String(value || "")
+		.trim()
+		.toLowerCase()
+		.replace(/[^\w]+/g, "_")
+		.replace(/^_+|_+$/g, "");
+}
+
 // Effektive Input-Pfade auflösen: Override (Vorlage) > Standardpfad (Baustein).
 function resolveInputs(baustein, haupt, overrides) {
 	const std = (baustein?.standardpfade || []).find((s) => s.startobjekt === haupt);
@@ -33,10 +41,12 @@ export const BausteinPopover = ({
 	hauptVerteilObjekt,
 	overrides,
 	values,
+	bausteinKey,
 	rect,
 	onClose,
 	onEditMapping,
 	onValuesChange,
+	onKeyChange,
 }) => {
 	useEffect(() => {
 		// Mount-Time merken, damit der Mount-Klick (= der mousedown, der das Popover
@@ -90,6 +100,22 @@ export const BausteinPopover = ({
 				</button>
 			</div>
 			{baustein.description && <div className="bp-desc">{baustein.description}</div>}
+
+			<div className="bp-section bp-key-section">
+				<label className="bp-value-label" title="Stabiler Schlüssel für Outputs dieses Bausteins">
+					Output-Key
+					<span className="bp-value-type">outputs.&lt;key&gt;</span>
+				</label>
+				<input
+					type="text"
+					className="bp-value-input bp-key-input"
+					value={bausteinKey || ""}
+					placeholder={baustein.name || "baustein"}
+					onChange={(e) => {
+						if (typeof onKeyChange === "function") onKeyChange(e.target.value);
+					}}
+				/>
+			</div>
 
 			{valueVars.length > 0 && (
 				<div className="bp-section">
@@ -156,6 +182,9 @@ export const BausteinPopover = ({
 								<span className="port-pin">●</span>
 								<span className="port-label">{out.label || out.name}</span>
 								<span className="port-type">{out.reference_doctype || out.type}</span>
+								{bausteinKey && out.name && (
+									<code className="bp-port-path">{`outputs.${bausteinKey}.${scrubKey(out.name)}`}</code>
+								)}
 							</div>
 						))}
 					</div>

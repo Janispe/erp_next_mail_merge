@@ -28,7 +28,7 @@ const BEISPIEL = { id: null, label: "Beispielwerte" };
 // Vorlage wird gleich darauf via loadTree -> onTemplateSelect geladen.
 const EMPTY_TEMPLATE = {
   id: null, title: "", kategorie: "", haupt_verteil_objekt: "",
-  content_type: "", htmlContent: "", bausteinPaths: {}, variables: [], canWrite: false,
+  content_type: "", htmlContent: "", bausteinPaths: {}, bausteinKeys: {}, variables: [], canWrite: false,
 };
 
 export const App = () => {
@@ -68,6 +68,8 @@ export const App = () => {
   const [bausteinPaths, setBausteinPaths] = useState({});
   // Pro-Baustein Werte für Text-/Bool-Variablen { "<Baustein>": { "<Variable>": <Wert> } }
   const [bausteinValues, setBausteinValues] = useState({});
+  // Pro-Baustein Output-Key { "<Baustein>": "<baustein_key>" }
+  const [bausteinKeys, setBausteinKeys] = useState({});
   const [mappingBaustein, setMappingBaustein] = useState(null);
   const [popoverBaustein, setPopoverBaustein] = useState(null); // { baustein, rect }
   // Jinja-Token-Editor-Popover (loest window.prompt ab). { token, rect, save, kind }
@@ -156,6 +158,7 @@ export const App = () => {
         setTitle(t.title);
         setBausteinPaths(t.bausteinPaths || {});
         setBausteinValues(t.bausteinValues || {});
+        setBausteinKeys(t.bausteinKeys || {});
         setVariables(t.variables || []);
         setPreviewVars({});
         setDirty(false);
@@ -252,7 +255,7 @@ export const App = () => {
     }
     setSaving(true);
     try {
-      const res = await saveTemplate(template.id, html, bausteinPaths, bausteinValues, variables, title);
+      const res = await saveTemplate(template.id, html, bausteinPaths, bausteinValues, bausteinKeys, variables, title);
       setDirty(false);
       // autoname = format:{title}: bei Titeländerung benennt das Backend um -> neue id.
       const renamed = res.id && res.id !== template.id;
@@ -509,6 +512,7 @@ export const App = () => {
       variables,
       bausteinPaths,
       bausteinValues,
+      bausteinKeys,
       previewVars,
       druckSchwarzWeiss,
     ]);
@@ -528,6 +532,7 @@ export const App = () => {
         variables,
         bausteinPaths,
         bausteinValues,
+        bausteinKeys,
         previewValues: previewVars,
         druckSchwarzWeiss,
       });
@@ -542,12 +547,12 @@ export const App = () => {
       setPreviewLoading(false);
       if (previewPending.current) { previewPending.current = false; refreshPreview({ force: true }); }
     }
-  }, [template.id, template.haupt_verteil_objekt, recipient, variables, bausteinPaths, bausteinValues, previewVars, druckSchwarzWeiss]);
+  }, [template.id, template.haupt_verteil_objekt, recipient, variables, bausteinPaths, bausteinValues, bausteinKeys, previewVars, druckSchwarzWeiss]);
 
   const refreshBausteinPreview = useCallback(async ({ force = false } = {}) => {
     if (!embedded || !template.id || !bausteinLayoutMode) return;
     const html = contentRef.current ? contentRef.current.getHtml() : (template.htmlContent || "");
-    const sig = JSON.stringify([html, recipient && recipient.id, variables, bausteinPaths, bausteinValues, previewVars]);
+    const sig = JSON.stringify([html, recipient && recipient.id, variables, bausteinPaths, bausteinValues, bausteinKeys, previewVars]);
     if (!force && sig === bausteinPreviewSig.current) return;
     if (bausteinPreviewBusy.current) {
       bausteinPreviewPending.current = true;
@@ -565,6 +570,7 @@ export const App = () => {
         variables,
         bausteinPaths,
         bausteinValues,
+        bausteinKeys,
         previewValues: previewVars,
       });
       setBausteinPreviewHtml(res.items || {});
@@ -578,7 +584,7 @@ export const App = () => {
         refreshBausteinPreview({ force: true });
       }
     }
-  }, [template.id, template.htmlContent, template.haupt_verteil_objekt, recipient, variables, bausteinPaths, bausteinValues, previewVars, bausteinLayoutMode]);
+  }, [template.id, template.htmlContent, template.haupt_verteil_objekt, recipient, variables, bausteinPaths, bausteinValues, bausteinKeys, previewVars, bausteinLayoutMode]);
 
   const scheduleBausteinPreview = useCallback(() => {
     if (!embedded || !bausteinLayoutMode) return;
@@ -634,7 +640,7 @@ export const App = () => {
         previewTimer.current = null;
       }
     };
-  }, [variables, bausteinPaths, bausteinValues, previewVars, schedulePreview]);
+  }, [variables, bausteinPaths, bausteinValues, bausteinKeys, previewVars, schedulePreview]);
 
   useEffect(() => {
     scheduleBausteinPreview();
@@ -644,7 +650,7 @@ export const App = () => {
         bausteinPreviewTimer.current = null;
       }
     };
-  }, [variables, bausteinPaths, bausteinValues, previewVars, scheduleBausteinPreview]);
+  }, [variables, bausteinPaths, bausteinValues, bausteinKeys, previewVars, scheduleBausteinPreview]);
 
   return (
     <div className="app">
@@ -813,6 +819,7 @@ export const App = () => {
           hauptVerteilObjekt={template.haupt_verteil_objekt}
           overrides={bausteinPaths[popoverBaustein.baustein.name] || {}}
           values={bausteinValues[popoverBaustein.baustein.name] || {}}
+          bausteinKey={bausteinKeys[popoverBaustein.baustein.name] || ""}
           rect={popoverBaustein.rect}
           onClose={() => setPopoverBaustein(null)}
           onEditMapping={() => {
@@ -829,6 +836,20 @@ export const App = () => {
               return next;
             });
             setDirty(true);
+          }}
+          onKeyChange={(value) => {
+            if (!editable) return;
+            const name = popoverBaustein.baustein.name;
+            setBausteinKeys((prev) => {
+              const next = { ...prev };
+              const clean = String(value || "").trim();
+              if (clean) next[name] = clean;
+              else delete next[name];
+              return next;
+            });
+            setDirty(true);
+            schedulePreview();
+            scheduleBausteinPreview();
           }}
         />
       )}

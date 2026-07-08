@@ -103,7 +103,7 @@ def _build_pfad_footer_html(template_doc) -> str:
 		return ""
 	chain: list[str] = []
 	current = cstr(getattr(template_doc, "kategorie", "") or "").strip()
-	for _ in range(20):
+	for _idx in range(20):
 		if not current:
 			break
 		try:
@@ -1628,6 +1628,7 @@ def render_editor_preview_pdf(
 	variables: str | None = None,
 	baustein_pfade: str | None = None,
 	baustein_werte: str | None = None,
+	baustein_keys: str | None = None,
 	iteration_doctype: str | None = None,
 	iteration_objekt: str | None = None,
 	split_preview: bool | None = None,
@@ -1656,6 +1657,8 @@ def render_editor_preview_pdf(
 			doc.content = cstr(html)
 	if variables is not None:
 		_apply_editor_variables(doc, variables)
+	if baustein_keys is not None:
+		_apply_editor_baustein_keys(doc, html if html is not None else _get_template_template_source(doc), baustein_keys)
 	if baustein_pfade is not None:
 		parsed = _parse_path_mapping(baustein_pfade)
 		doc.inline_baustein_pfade = frappe.as_json(parsed) if parsed else ""
@@ -1691,6 +1694,7 @@ def render_editor_baustein_previews(
 	variables: str | None = None,
 	baustein_pfade: str | None = None,
 	baustein_werte: str | None = None,
+	baustein_keys: str | None = None,
 	iteration_doctype: str | None = None,
 	iteration_objekt: str | None = None,
 	preview_values: str | None = None,
@@ -1716,6 +1720,8 @@ def render_editor_baustein_previews(
 			doc.content = cstr(html)
 	if variables is not None:
 		_apply_editor_variables(doc, variables)
+	if baustein_keys is not None:
+		_apply_editor_baustein_keys(doc, html if html is not None else _get_template_template_source(doc), baustein_keys)
 	if baustein_pfade is not None:
 		parsed = _parse_path_mapping(baustein_pfade)
 		doc.inline_baustein_pfade = frappe.as_json(parsed) if parsed else ""
@@ -2415,6 +2421,8 @@ def get_editor_template(name: str | None = None) -> Dict[str, Any]:
 		# Pro-Baustein Werte (Text / Bool) für inline eingefügte Bausteine.
 		# Struktur identisch zu baustein_pfade: { "<Baustein>": { "<Variable>": <Wert> } }.
 		"baustein_werte": _parse_path_mapping(doc.get("inline_baustein_werte")),
+		# Pro-Baustein Output-Key aus Serienbrief Vorlagenbaustein.baustein_key.
+		"baustein_keys": _get_editor_baustein_keys(doc),
 	}
 
 
@@ -2479,12 +2487,72 @@ def _apply_editor_variables(doc, variables) -> None:
 	doc.pfad_zuordnung = frappe.as_json(pfade) if pfade else ""
 
 
+def _extract_editor_inline_block_names(source: str | None) -> list[str]:
+	pattern = re.compile(r"\{\{\s*(?:baustein|textbaustein)\(\s*['\"]([^'\"]+)['\"]\s*\)\s*\}\}")
+	names: list[str] = []
+	seen: set[str] = set()
+	for match in pattern.finditer(cstr(source or "")):
+		name = cstr(match.group(1)).strip()
+		if not name or name in seen:
+			continue
+		seen.add(name)
+		names.append(name)
+	return names
+
+
+def _parse_string_mapping(raw) -> dict[str, str]:
+	data = _parse_path_mapping(raw)
+	clean: dict[str, str] = {}
+	for key, value in data.items():
+		k = cstr(key).strip()
+		v = cstr(value).strip()
+		if k and v:
+			clean[k] = v
+	return clean
+
+
+def _get_editor_baustein_keys(doc) -> dict[str, str]:
+	keys: dict[str, str] = {}
+	for row in doc.get("textbausteine") or []:
+		block_name = cstr(getattr(row, "baustein", None) or "").strip()
+		if not block_name or block_name in keys:
+			continue
+		key = cstr(getattr(row, "baustein_key", None) or "").strip()
+		keys[block_name] = key or frappe.scrub(block_name)
+	return keys
+
+
+def _apply_editor_baustein_keys(doc, source: str | None, baustein_keys: str | dict | None) -> None:
+	keys = _parse_string_mapping(baustein_keys)
+	inline_names = _extract_editor_inline_block_names(source)
+	target_names = inline_names or list(keys.keys())
+	if not target_names:
+		return
+
+	rows_by_block: dict[str, Any] = {}
+	for row in doc.get("textbausteine") or []:
+		block_name = cstr(getattr(row, "baustein", None) or "").strip()
+		if block_name and block_name not in rows_by_block:
+			rows_by_block[block_name] = row
+
+	for block_name in target_names:
+		if not block_name:
+			continue
+		row = rows_by_block.get(block_name)
+		if row is None:
+			row = doc.append("textbausteine", {"baustein": block_name})
+			rows_by_block[block_name] = row
+		if block_name in keys:
+			row.baustein_key = keys[block_name]
+
+
 @frappe.whitelist()
 def save_editor_template(
 	name: str | None = None,
 	html: str | None = None,
 	baustein_pfade: str | None = None,
 	baustein_werte: str | None = None,
+	baustein_keys: str | None = None,
 	variables: str | None = None,
 	title: str | None = None,
 ) -> Dict[str, Any]:
@@ -2494,6 +2562,7 @@ def save_editor_template(
 	  (Doctype-Variablen).
 	baustein_werte (JSON) = Pro-Baustein Werte für Text-/Bool-Variablen inline; selbes
 	  Format { "<Baustein>": { "<Variable>": <Wert> } }.
+	baustein_keys (JSON) = Pro-Baustein Output-Key für inline Bausteine.
 	variables (JSON-Array) = Variablen-Definitionen inkl. Wert (Text) / Pfad (Doctype);
 	rebaut die variables-Child-Tabelle + variablen_werte + pfad_zuordnung."""
 	template_name = (name or "").strip()
@@ -2509,6 +2578,8 @@ def save_editor_template(
 		doc.html_content = new_html
 	else:
 		doc.content = new_html
+	if baustein_keys is not None:
+		_apply_editor_baustein_keys(doc, new_html, baustein_keys)
 	if baustein_pfade is not None:
 		# normalisiert als JSON-String ablegen (nur Dicts akzeptieren)
 		parsed = _parse_path_mapping(baustein_pfade)

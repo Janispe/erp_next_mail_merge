@@ -2752,6 +2752,11 @@ span[style*="color"] > .chip {
   border-top: 1px solid var(--border);
 }
 .bp-section:nth-of-type(1) { border-top: none; }
+.bp-key-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .bp-section-label {
   font-size: 10px;
   text-transform: uppercase;
@@ -2854,6 +2859,9 @@ span[style*="color"] > .chip {
   outline: 2px solid var(--primary-100);
   outline-offset: 0;
   border-color: var(--primary);
+}
+.bp-key-input {
+  flex: 0 0 170px;
 }
 .bp-value-checkbox {
   width: 16px;
