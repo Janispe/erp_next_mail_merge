@@ -1153,11 +1153,38 @@ def _load_template_doc(template: str | None = None, template_doc: Dict[str, Any]
 			template_doc = None
 
 	if template_doc:
+		if not isinstance(template_doc, dict) or template_doc.get("doctype") != "Serienbrief Vorlage":
+			frappe.throw(
+				_("Ungültiger Dokumenttyp für die Serienbrief-Vorschau."),
+				frappe.ValidationError,
+			)
 		return frappe.get_doc(template_doc)
 	if template:
 		return frappe.get_doc("Serienbrief Vorlage", template)
 
 	frappe.throw(_("Bitte wählen Sie eine Vorlage."))
+
+
+def _require_template_preview_permission(doc, *, supplied_template_doc: bool) -> None:
+	"""Authorize stored previews and the more powerful in-memory editor preview."""
+	template_name = cstr(getattr(doc, "name", None) or "").strip()
+	if supplied_template_doc:
+		if template_name and frappe.db.exists("Serienbrief Vorlage", template_name):
+			permission_type = "write"
+			message = _("Keine Berechtigung, diese Vorlage zu bearbeiten.")
+		else:
+			permission_type = "create"
+			message = _("Keine Berechtigung, eine Vorlage anzulegen.")
+	else:
+		permission_type = "read"
+		message = _("Keine Berechtigung, diese Vorlage zu lesen.")
+
+	if not frappe.has_permission(
+		"Serienbrief Vorlage",
+		permission_type,
+		doc=template_name if template_name and permission_type != "create" else None,
+	):
+		frappe.throw(message, frappe.PermissionError)
 
 
 def _build_raw_template_html(template_doc) -> str:
@@ -1466,6 +1493,11 @@ def _render_segments_via_durchlauf(
 		frappe.throw(
 			_("Iterationsobjekt {0} {1} existiert nicht.").format(iteration_doctype, iteration_name)
 		)
+	if not frappe.has_permission(iteration_doctype, "read", doc=iteration_name):
+		frappe.throw(
+			_("Keine Berechtigung, das ausgewählte Vorschauobjekt zu lesen."),
+			frappe.PermissionError,
+		)
 
 	durchlauf = frappe.new_doc("Serienbrief Durchlauf")
 	durchlauf.title = f"Vorschau: {template_doc.title or template_doc.name}"
@@ -1523,6 +1555,10 @@ def render_template_preview_pdf(
 	_skip_cache: bool = False,
 ) -> Dict[str, str]:
 	doc = _load_template_doc(template, template_doc)
+	_require_template_preview_permission(
+		doc,
+		supplied_template_doc=bool(template_doc),
+	)
 	druck_sw = bool(cint(druck_schwarz_weiss or 0))
 
 	iter_dt = (
@@ -1646,8 +1682,8 @@ def render_editor_preview_pdf(
 	template_name = (template or "").strip()
 	if not template_name:
 		frappe.throw(_("Bitte eine Vorlage angeben."))
-	if not frappe.has_permission("Serienbrief Vorlage", "read", doc=template_name):
-		frappe.throw(_("Keine Berechtigung, die Vorlage zu lesen."), frappe.PermissionError)
+	if not frappe.has_permission("Serienbrief Vorlage", "write", doc=template_name):
+		frappe.throw(_("Keine Berechtigung, diese Vorlage zu bearbeiten."), frappe.PermissionError)
 
 	doc = frappe.get_doc("Serienbrief Vorlage", template_name)
 	if html is not None:
@@ -2009,6 +2045,10 @@ def render_template_preview_html(
 	template: str | None = None, template_doc: Dict[str, Any] | None = None
 ) -> Dict[str, str]:
 	doc = _load_template_doc(template, template_doc)
+	_require_template_preview_permission(
+		doc,
+		supplied_template_doc=bool(template_doc),
+	)
 	html = _build_raw_template_html(doc)
 
 	if not html:
