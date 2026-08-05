@@ -2799,6 +2799,11 @@ def get_editor_bausteine() -> Dict[str, Any]:
 	items = []
 	for r in rows:
 		doc = frappe.get_cached_doc("Serienbrief Textbaustein", r.name)
+		tags = [
+			tag.strip()
+			for tag in cstr(doc.get("_user_tags") or "").split(",")
+			if tag.strip()
+		]
 		inputs = [
 			{
 				"name": v.variable,
@@ -2832,6 +2837,7 @@ def get_editor_bausteine() -> Dict[str, Any]:
 				"title": r.title or r.name,
 				"description": r.description or "",
 				"preview": _baustein_preview(r.text_content),
+				"tags": tags,
 				"inputs": inputs,
 				"outputs": outputs,
 				"standardpfade": standardpfade,

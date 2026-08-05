@@ -626,6 +626,27 @@ export const App = () => {
     }
   }, [template.id, template.htmlContent, template.haupt_verteil_objekt, recipient, variables, bausteinPaths, bausteinValues, bausteinKeys, previewVars, bausteinLayoutMode]);
 
+  // Vorschau fuer einen Baustein aus dem rechten Katalog. Anders als die
+  // Layoutmodus-Vorschau wird sie gezielt fuer genau einen ausgewaehlten
+  // Baustein geladen, auch wenn dieser noch nicht im Brief enthalten ist.
+  const loadBausteinCatalogPreview = useCallback(async (name) => {
+    const blockName = String(name || "").trim();
+    if (!embedded || !template.id || !blockName) return "";
+    const escapedName = blockName.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const res = await renderBausteinPreviews({
+      templateName: template.id,
+      hauptVerteilObjekt: template.haupt_verteil_objekt,
+      recipientId: recipient && recipient.id,
+      html: `<p>{{ baustein("${escapedName}") }}</p>`,
+      variables,
+      bausteinPaths,
+      bausteinValues,
+      bausteinKeys,
+      previewValues: previewVars,
+    });
+    return (res.items && res.items[blockName]) || "";
+  }, [template.id, template.haupt_verteil_objekt, recipient, variables, bausteinPaths, bausteinValues, bausteinKeys, previewVars]);
+
   const scheduleBausteinPreview = useCallback(() => {
     if (!embedded || !bausteinLayoutMode) return;
     if (bausteinPreviewTimer.current) clearTimeout(bausteinPreviewTimer.current);
@@ -810,6 +831,7 @@ export const App = () => {
           }}
           onInsertPlaceholder={insertPlaceholder}
           onInsertBaustein={insertBaustein}
+          onLoadBausteinPreview={loadBausteinCatalogPreview}
           onMaximizePreview={() => setPdfMaximized(true)}
           onResizeStart={onResizeStart}
           variables={variables}

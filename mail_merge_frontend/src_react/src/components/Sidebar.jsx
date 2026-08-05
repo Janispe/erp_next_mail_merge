@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { Icon } from "./Icon.jsx";
+import { loadPref, savePref } from "../persist.js";
 
 // base64-PDF → Blob-URL (vermeidet riesige data:-URIs / CSP-Probleme)
 function usePdfUrl(base64) {
@@ -311,21 +312,284 @@ const PlaceholderPane = ({ groups, onInsert }) => {
 // =========================
 // Bausteine pane (echt)
 // =========================
-const BausteinePane = ({ items, onInsert }) => {
+const BAUSTEIN_VALUE_TYPES = new Set(["Text", "Bool"]);
+const BAUSTEIN_AUTO_TAGS = [
+  { tag: "Briefgestaltung", match: /briefkopf|footer|fußzeile|fusszeile|unterschrift/i },
+  { tag: "Betriebskosten", match: /betriebskosten|bk[- ]?abrechnung|nebenkosten|heizkosten/i },
+  { tag: "Zahlung & Mahnung", match: /bank|zahlung|mietkonto|rückstand|rueckstand|mahnung/i },
+  { tag: "Anrede & Personen", match: /anrede|mieter.*name|eigentümer|eigentuemer|empfänger|empfaenger/i },
+  { tag: "Mietvertrag", match: /mietvertrag|miethistorie|mietverhältnis|mietverhaeltnis/i },
+  { tag: "Hinweise", match: /hinweis|lüft|lueft|rauchwarn|information/i },
+];
+
+function tagsForBaustein(baustein) {
+  const explicit = Array.isArray(baustein?.tags)
+    ? baustein.tags
+    : String(baustein?.tags || "").split(",");
+  const clean = explicit.map((tag) => String(tag || "").trim()).filter(Boolean);
+  if (clean.length) return [...new Set(clean)];
+  const haystack = `${baustein?.title || ""} ${baustein?.description || ""}`;
+  const automatic = BAUSTEIN_AUTO_TAGS.filter((rule) => rule.match.test(haystack)).map((rule) => rule.tag);
+  return automatic.length ? automatic : ["Sonstige"];
+}
+
+const BausteinePane = ({
+  items,
+  onInsert,
+  onLoadPreview,
+  recipient,
+  hauptVerteilObjekt,
+  editable,
+}) => {
   const [q, setQ] = useState("");
+  const [selectedName, setSelectedName] = useState("");
+  const [collection, setCollection] = useState("all");
+  const [activeTag, setActiveTag] = useState("");
+  const [favorites, setFavorites] = useState(() => new Set(loadPref("bausteinFavorites", [])));
+  const [recent, setRecent] = useState(() => loadPref("bausteinRecent", []));
+  const [collapsedGroups, setCollapsedGroups] = useState(
+    () => new Set(loadPref("bausteinCollapsedGroups", []))
+  );
+  const [previewHtml, setPreviewHtml] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const decorated = useMemo(
+    () => items.map((item) => ({ ...item, catalogTags: tagsForBaustein(item) })),
+    [items]
+  );
+  const allTags = useMemo(
+    () => [...new Set(decorated.flatMap((item) => item.catalogTags))].sort((a, b) => a.localeCompare(b, "de")),
+    [decorated]
+  );
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();
-    if (!query) return items;
-    return items.filter(b =>
-      (b.title || "").toLowerCase().includes(query) ||
-      (b.description || "").toLowerCase().includes(query)
-    );
-  }, [q, items]);
+    let result = decorated;
+    if (collection === "favorites") result = result.filter((b) => favorites.has(b.name));
+    if (collection === "recent") {
+      const order = new Map(recent.map((name, index) => [name, index]));
+      result = result.filter((b) => order.has(b.name)).sort((a, b) => order.get(a.name) - order.get(b.name));
+    }
+    if (activeTag) result = result.filter((b) => b.catalogTags.includes(activeTag));
+    if (query) {
+      result = result.filter((b) =>
+        (b.title || "").toLowerCase().includes(query) ||
+        (b.description || "").toLowerCase().includes(query) ||
+        (b.preview || "").toLowerCase().includes(query) ||
+        b.catalogTags.some((tag) => tag.toLowerCase().includes(query))
+      );
+    }
+    return result;
+  }, [q, decorated, collection, activeTag, favorites, recent]);
+  const grouped = useMemo(() => {
+    if (collection === "recent") return [["Zuletzt verwendet", filtered]];
+    const groups = new Map();
+    filtered.forEach((item) => {
+      const group = activeTag || item.catalogTags[0] || "Sonstige";
+      if (!groups.has(group)) groups.set(group, []);
+      groups.get(group).push(item);
+    });
+    return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b, "de"));
+  }, [filtered, collection, activeTag]);
+  const selected = useMemo(
+    () => decorated.find((b) => b.name === selectedName) || null,
+    [decorated, selectedName]
+  );
+
+  useEffect(() => savePref("bausteinFavorites", [...favorites]), [favorites]);
+  useEffect(() => savePref("bausteinRecent", recent), [recent]);
+  useEffect(() => savePref("bausteinCollapsedGroups", [...collapsedGroups]), [collapsedGroups]);
+
+  const toggleFavorite = (name) => {
+    setFavorites((current) => {
+      const next = new Set(current);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+  const markRecent = (name) => {
+    setRecent((current) => [name, ...current.filter((entry) => entry !== name)].slice(0, 6));
+  };
+  const selectBaustein = (name) => {
+    markRecent(name);
+    setSelectedName(name);
+  };
+  const insertBaustein = (name) => {
+    markRecent(name);
+    onInsert(name);
+  };
+  const toggleGroup = (group) => {
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(group)) next.delete(group);
+      else next.add(group);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (!selected || typeof onLoadPreview !== "function") {
+      setPreviewHtml("");
+      setPreviewLoading(false);
+      setPreviewError("");
+      return;
+    }
+    let alive = true;
+    setPreviewLoading(true);
+    setPreviewError("");
+    Promise.resolve(onLoadPreview(selected.name))
+      .then((html) => {
+        if (alive) setPreviewHtml(html || "");
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setPreviewHtml("");
+        setPreviewError((e && e.message) || String(e));
+      })
+      .finally(() => {
+        if (alive) setPreviewLoading(false);
+      });
+    return () => { alive = false; };
+  }, [selected, onLoadPreview]);
 
   const onDragStart = (e, name) => {
     e.dataTransfer.setData("application/json", JSON.stringify({ kind: "baustein", name }));
     e.dataTransfer.effectAllowed = "copy";
   };
+
+  if (selected) {
+    const inputs = selected.inputs || [];
+    const values = inputs.filter((inp) => BAUSTEIN_VALUE_TYPES.has((inp.type || "").trim()));
+    const objectInputs = inputs.filter((inp) => !BAUSTEIN_VALUE_TYPES.has((inp.type || "").trim()));
+    const outputs = selected.outputs || [];
+    const standards = selected.standardpfade || [];
+    const activeStandard = standards.find((s) => s.startobjekt === hauptVerteilObjekt);
+    const standardMappings = activeStandard?.mappings || {};
+    const previewContext = recipient?.label || "Beispielwerte";
+    const purpose = selected.description ||
+      `Fügt den zentral gepflegten Inhalt „${selected.title || selected.name}“ an der aktuellen Cursorposition in den Brief ein.`;
+
+    return (
+      <div className="bs-pane bs-detail-pane">
+        <button className="bs-detail-back" onClick={() => setSelectedName("")}>
+          <Icon name="back" size={13}/> Alle Bausteine
+        </button>
+
+        <section className="bs-detail-card">
+          <div className="bs-detail-title-row">
+            <span className="bs-detail-icon"><Icon name="block" size={15}/></span>
+            <div className="bs-detail-title-main">
+              <h3>{selected.title || selected.name}</h3>
+              <code>{`{{ baustein("${selected.name}") }}`}</code>
+              <div className="bs-detail-tags">
+                {selected.catalogTags.map((tag) => <span key={tag}>{tag}</span>)}
+              </div>
+            </div>
+            <button
+              type="button"
+              className={`bs-favorite-btn ${favorites.has(selected.name) ? "active" : ""}`}
+              aria-label={favorites.has(selected.name) ? "Aus Favoriten entfernen" : "Zu Favoriten hinzufügen"}
+              title={favorites.has(selected.name) ? "Aus Favoriten entfernen" : "Zu Favoriten hinzufügen"}
+              onClick={() => toggleFavorite(selected.name)}
+            >
+              <Icon name="star" size={15}/>
+            </button>
+          </div>
+
+          <div className="bs-detail-section">
+            <div className="bs-detail-label">Was macht dieser Baustein?</div>
+            <p className="bs-detail-purpose">{purpose}</p>
+          </div>
+
+          <div className="bs-detail-section">
+            <div className="bs-detail-label-row">
+              <span className="bs-detail-label">Gerenderte Vorschau</span>
+              <span className="bs-context-badge" title={previewContext}>{previewContext}</span>
+            </div>
+            {previewLoading ? (
+              <div className="bs-detail-loading"><span className="spinner"/> Vorschau wird gerendert…</div>
+            ) : previewError ? (
+              <div className="bs-detail-error">Vorschau konnte nicht geladen werden: {previewError}</div>
+            ) : previewHtml ? (
+              <div
+                className="bs-detail-rendered baustein-preview-body"
+                dangerouslySetInnerHTML={{ __html: previewHtml }}
+              />
+            ) : selected.preview ? (
+              <div className="bs-detail-rendered bs-detail-plain-preview">{selected.preview}</div>
+            ) : (
+              <div className="bs-detail-empty">Dieser Baustein erzeugt keinen direkt sichtbaren Inhalt.</div>
+            )}
+          </div>
+
+          {(objectInputs.length > 0 || values.length > 0) && (
+            <div className="bs-detail-section">
+              <div className="bs-detail-label">Benötigt</div>
+              <div className="bs-info-list">
+                {objectInputs.map((inp) => (
+                  <div className="bs-info-row" key={`input-${inp.name}`}>
+                    <span className="bs-info-dot bs-info-dot-in"/>
+                    <div className="bs-info-main">
+                      <strong>{inp.label || inp.name}</strong>
+                      {inp.desc && <span>{inp.desc}</span>}
+                      {standardMappings[inp.name] && <code>{standardMappings[inp.name]}</code>}
+                    </div>
+                    <span className="bs-info-type">{inp.reference_doctype || inp.type}</span>
+                  </div>
+                ))}
+                {values.map((inp) => (
+                  <div className="bs-info-row" key={`value-${inp.name}`}>
+                    <span className="bs-info-dot bs-info-dot-value"/>
+                    <div className="bs-info-main">
+                      <strong>{inp.label || inp.name}</strong>
+                      <span>{inp.desc || "Wird beim Baustein im Brief konfiguriert."}</span>
+                    </div>
+                    <span className="bs-info-type">{inp.type}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {outputs.length > 0 && (
+            <div className="bs-detail-section">
+              <div className="bs-detail-label">Stellt bereit</div>
+              <div className="bs-info-list">
+                {outputs.map((out) => (
+                  <div className="bs-info-row" key={`output-${out.name}`}>
+                    <span className="bs-info-dot bs-info-dot-out"/>
+                    <div className="bs-info-main">
+                      <strong>{out.label || out.name}</strong>
+                      {out.desc && <span>{out.desc}</span>}
+                    </div>
+                    <span className="bs-info-type">{out.reference_doctype || out.type}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="bs-detail-section bs-detail-meta">
+            <span>
+              <strong>{objectInputs.length + values.length}</strong> Eingaben
+            </span>
+            <span><strong>{outputs.length}</strong> Ausgaben</span>
+            <span title={standards.map((s) => s.startobjekt).join(", ")}>
+              <strong>{standards.length}</strong> Standard-Zuordnungen
+            </span>
+          </div>
+
+          <button
+            className="btn primary bs-detail-insert"
+            disabled={!editable}
+            onClick={() => insertBaustein(selected.name)}
+          >
+            <Icon name="plus" size={13}/> An Cursor einfügen
+          </button>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="bs-pane">
@@ -334,29 +598,104 @@ const BausteinePane = ({ items, onInsert }) => {
           <span className="icon-left"><Icon name="search" size={13}/></span>
           <input className="ph-search-input" placeholder="Baustein suchen…" value={q} onChange={e => setQ(e.target.value)}/>
         </div>
-        <div className="ph-hint"><strong>{items.length}</strong> Textbausteine · Klicken fügt {`{{ baustein("…") }}`} an den Cursor</div>
+        <div className="ph-hint"><strong>{items.length}</strong> Textbausteine · Nach Tags gruppiert · Ziehen fügt ein</div>
       </div>
 
-      {filtered.map((b, i) => (
-        <div key={i} className="bs-card" draggable onDragStart={e => onDragStart(e, b.name)}>
-          <div className="bs-head">
-            <Icon name="block" size={13} style={{ color: "var(--accent)" }}/>
-            <div style={{ flex: 1 }}>
-              <div className="bs-title">{b.title}</div>
-              {b.description && <div className="bs-desc">{b.description}</div>}
-            </div>
-          </div>
-          {b.preview && <div className="bs-preview">{b.preview}</div>}
-          <div className="bs-actions">
-            <button className="btn sm" onClick={() => onInsert(b.name)}>
-              <Icon name="plus" size={12}/> An Cursor einfügen
+      <div className="bs-collection-tabs" role="group" aria-label="Baustein-Sammlung">
+        <button className={collection === "all" ? "active" : ""} onClick={() => setCollection("all")}>
+          <Icon name="grid" size={12}/> Alle <span>{items.length}</span>
+        </button>
+        <button className={collection === "favorites" ? "active" : ""} onClick={() => setCollection("favorites")}>
+          <Icon name="star" size={12}/> Favoriten <span>{favorites.size}</span>
+        </button>
+        <button className={collection === "recent" ? "active" : ""} onClick={() => setCollection("recent")}>
+          <Icon name="clock" size={12}/> Zuletzt
+        </button>
+      </div>
+
+      <div className="bs-tag-filter" aria-label="Nach Tag filtern">
+        <button className={!activeTag ? "active" : ""} onClick={() => setActiveTag("")}>Alle Tags</button>
+        {allTags.map((tag) => (
+          <button key={tag} className={activeTag === tag ? "active" : ""} onClick={() => setActiveTag(activeTag === tag ? "" : tag)}>
+            {tag}
+          </button>
+        ))}
+      </div>
+
+      {grouped.map(([group, groupItems]) => {
+        if (!groupItems.length) return null;
+        const collapsed = collapsedGroups.has(group);
+        return (
+          <section className="bs-catalog-group" key={group}>
+            <button className="bs-catalog-group-head" onClick={() => toggleGroup(group)} aria-expanded={!collapsed}>
+              <Icon name="chevron-down" size={12} className={collapsed ? "collapsed" : ""}/>
+              <span>{group}</span>
+              <span className="bs-catalog-group-count">{groupItems.length}</span>
             </button>
-          </div>
-        </div>
-      ))}
+            {!collapsed && groupItems.map((b) => (
+              <div
+                key={b.name}
+                className="bs-card"
+                draggable={!!editable}
+                onDragStart={e => onDragStart(e, b.name)}
+              >
+                <button
+                  type="button"
+                  className="bs-card-select"
+                  aria-label={`${b.title || b.name} – Details anzeigen`}
+                  onClick={() => selectBaustein(b.name)}
+                >
+                  <div className="bs-head">
+                    <Icon name="block" size={13} style={{ color: "var(--accent)" }}/>
+                    <div style={{ flex: 1 }}>
+                      <div className="bs-title">{b.title}</div>
+                      {b.description && <div className="bs-desc">{b.description}</div>}
+                    </div>
+                    <Icon name="chevron-right" size={13} className="bs-open-icon"/>
+                  </div>
+                  {b.preview && <div className="bs-preview">{b.preview}</div>}
+                  <div className="bs-card-tags">
+                    {b.catalogTags.map((tag) => <span key={tag}>{tag}</span>)}
+                  </div>
+                  <div className="bs-card-meta">
+                    <span>{(b.inputs || []).length} Eingaben</span>
+                    <span>{(b.outputs || []).length} Ausgaben</span>
+                  </div>
+                </button>
+                <div className="bs-actions">
+                  <button
+                    type="button"
+                    className={`bs-favorite-btn ${favorites.has(b.name) ? "active" : ""}`}
+                    aria-label={favorites.has(b.name) ? `${b.title} aus Favoriten entfernen` : `${b.title} zu Favoriten hinzufügen`}
+                    title={favorites.has(b.name) ? "Aus Favoriten entfernen" : "Zu Favoriten hinzufügen"}
+                    onClick={() => toggleFavorite(b.name)}
+                  >
+                    <Icon name="star" size={13}/>
+                  </button>
+                  <button
+                    className="btn sm"
+                    disabled={!editable}
+                    onClick={() => insertBaustein(b.name)}
+                  >
+                    <Icon name="plus" size={12}/> An Cursor einfügen
+                  </button>
+                </div>
+              </div>
+            ))}
+          </section>
+        );
+      })}
 
       {filtered.length === 0 && (
-        <div className="empty-hint" style={{ marginTop: 24 }}>Keine Bausteine für „{q}".</div>
+        <div className="bs-empty-state">
+          {collection === "favorites" ? (
+            <><Icon name="star" size={20}/><strong>Noch keine Favoriten</strong><span>Markiere häufig verwendete Bausteine mit dem Stern.</span></>
+          ) : collection === "recent" ? (
+            <><Icon name="clock" size={20}/><strong>Noch nichts verwendet</strong><span>Geöffnete und eingefügte Bausteine erscheinen hier.</span></>
+          ) : (
+            <><Icon name="search" size={20}/><strong>Keine Bausteine gefunden</strong><span>{q ? `Keine Treffer für „${q}“.` : "Für diesen Tag gibt es keine Treffer."}</span></>
+          )}
+        </div>
       )}
     </div>
   );
@@ -494,7 +833,7 @@ export const Sidebar = ({
   placeholders, bausteine,
   onChangeRecipient, onSearchRecipients,
   previewPdf, previewLoading, previewError, previewMode, onRefreshPreview,
-  onInsertPlaceholder, onInsertBaustein, onMaximizePreview, onResizeStart,
+  onInsertPlaceholder, onInsertBaustein, onLoadBausteinPreview, onMaximizePreview, onResizeStart,
   variables, placeholderPaths, onVariablesChange, editable = true,
   druckSchwarzWeiss, onDruckSchwarzWeissChange,
   variablesForPreview, previewVars, onPreviewVarChange,
@@ -532,7 +871,16 @@ export const Sidebar = ({
           />
         )}
         {tab === "placeholders" && <PlaceholderPane groups={placeholders || []} onInsert={onInsertPlaceholder}/>}
-        {tab === "bausteine" && <BausteinePane items={bausteine || []} onInsert={onInsertBaustein}/>}
+        {tab === "bausteine" && (
+          <BausteinePane
+            items={bausteine || []}
+            onInsert={onInsertBaustein}
+            onLoadPreview={onLoadBausteinPreview}
+            recipient={recipient}
+            hauptVerteilObjekt={template.haupt_verteil_objekt}
+            editable={editable}
+          />
+        )}
         {tab === "variables" && (
           <VariablesPane
             variables={variables}
