@@ -59,13 +59,32 @@ function insertRawToken(editor, raw) {
 	else editor.chain().focus().insertContent(decorateForTiptap(t)).run();
 }
 
-const PAGE_SIM = {
+const DEFAULT_PAGE_SIM = {
 	pageMm: 297,
 	pageGapMm: 14,
 	pageWidthMm: 210,
-	paddingTopMm: 20,
-	paddingBottomMm: 16,
+	marginTopMm: 20,
+	marginRightMm: 20,
+	marginBottomMm: 16,
+	marginLeftMm: 25,
 };
+
+function currentPageSimulation() {
+	const configured = (typeof window !== "undefined" && window.__hvEditorPageLayout) || {};
+	const numberOr = (value, fallback) => {
+		const parsed = Number(value);
+		return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+	};
+	return {
+		pageMm: numberOr(configured.pageHeightMm, DEFAULT_PAGE_SIM.pageMm),
+		pageGapMm: DEFAULT_PAGE_SIM.pageGapMm,
+		pageWidthMm: numberOr(configured.pageWidthMm, DEFAULT_PAGE_SIM.pageWidthMm),
+		marginTopMm: numberOr(configured.marginTopMm, DEFAULT_PAGE_SIM.marginTopMm),
+		marginRightMm: numberOr(configured.marginRightMm, DEFAULT_PAGE_SIM.marginRightMm),
+		marginBottomMm: numberOr(configured.marginBottomMm, DEFAULT_PAGE_SIM.marginBottomMm),
+		marginLeftMm: numberOr(configured.marginLeftMm, DEFAULT_PAGE_SIM.marginLeftMm),
+	};
+}
 
 function clearPageSimulation(dom) {
 	if (!dom) return;
@@ -75,37 +94,99 @@ function clearPageSimulation(dom) {
 	});
 }
 
+// Fuer eine neue Pagination brauchen wir die natuerlichen Elementpositionen
+// ohne bereits gesetzte Simulationsabstaende. Die Decorations bleiben dabei
+// im ProseMirror-State erhalten; wir neutralisieren sie nur synchron fuer die
+// Messung und stellen den DOM danach wieder her. So koennen veraltete Umbrueche
+// (z.B. nach Empfaenger- oder Platzhalterwechsel) auch wieder verschwinden.
+function measureWithoutPageSimulation(dom, measure) {
+	if (!dom) return measure();
+	const saved = Array.from(dom.querySelectorAll(".hv-page-sim-next")).map((el) => ({
+		el,
+		gap: el.style.getPropertyValue("--hv-page-sim-gap"),
+	}));
+	saved.forEach(({ el }) => {
+		el.classList.remove("hv-page-sim-next");
+		el.style.removeProperty("--hv-page-sim-gap");
+	});
+	try {
+		return measure();
+	} finally {
+		saved.forEach(({ el, gap }) => {
+			if (!el.isConnected) return;
+			el.classList.add("hv-page-sim-next");
+			if (gap) el.style.setProperty("--hv-page-sim-gap", gap);
+		});
+	}
+}
+
 function clearPageSimulationDecorations(editor) {
 	if (!editor?.view) return;
 	editor.storage.hvPageSimulationKey = null;
 	editor.view.dispatch(editor.view.state.tr.setMeta(pageSimPluginKey, DecorationSet.empty));
 }
 
+// Chromium darf Listen zwischen <li>-Elementen und Tabellen zwischen Zeilen
+// umbrechen. Die alte Simulation sah nur direkte pm.children und behandelte
+// damit ein komplettes <ol> als unteilbaren Block. Diese Kandidaten spiegeln
+// die tatsächlich umbrechbaren ProseMirror-Knoten samt Dokumentposition.
+function collectPageBreakCandidates(editor) {
+	const result = [];
+	const doc = editor?.view?.state?.doc;
+	if (!doc) return result;
+
+	doc.descendants((node, pos, parent) => {
+		if (!node.isBlock) return true;
+		const type = node.type.name;
+		const parentType = parent?.type?.name || "";
+		const isTopLevel = parent === doc;
+		const isListItem = type === "listItem";
+		const isTableRow = type === "tableRow";
+		const isTextBlock = !!node.isTextblock;
+		const isAtomicBlock = !!node.isAtom;
+		const isWholeTopLevelBlock = isTopLevel && !["bulletList", "orderedList", "table"].includes(type);
+		const isListFallback = isTextBlock && parentType === "listItem";
+
+		if (isListItem || isTableRow || isWholeTopLevelBlock || isListFallback || isAtomicBlock) {
+			const dom = editor.view.nodeDOM(pos);
+			if (dom instanceof HTMLElement && dom.isConnected) {
+				result.push({ node, offset: pos, element: dom });
+			}
+		}
+		return true;
+	});
+
+	return result;
+}
+
 function applyPageSimulation(canvas, editor) {
 	const pm = editor?.view?.dom;
 	if (!canvas || !pm) return;
 
-	const children = Array.from(pm.children).filter((el) => {
-		if (!(el instanceof HTMLElement)) return false;
-		if (el.classList.contains("ProseMirror-trailingBreak")) return false;
-		return el.getBoundingClientRect().height > 0;
-	});
-	if (!children.length) return;
+	const measured = measureWithoutPageSimulation(pm, () =>
+		collectPageBreakCandidates(editor)
+			.map((candidate) => {
+				const rect = candidate.element.getBoundingClientRect();
+				return { ...candidate, naturalTop: rect.top, height: rect.height };
+			})
+			.filter(({ height }) => height > 0)
+	);
+	const candidates = measured;
+	if (!candidates.length) return;
 
+	const page = currentPageSimulation();
 	const canvasRect = canvas.getBoundingClientRect();
-	const pxPerMm = canvasRect.width / PAGE_SIM.pageWidthMm;
-	const pageHeight = PAGE_SIM.pageMm * pxPerMm;
-	const pageGap = PAGE_SIM.pageGapMm * pxPerMm;
+	const pxPerMm = canvasRect.width / page.pageWidthMm;
+	const pageHeight = page.pageMm * pxPerMm;
+	const pageGap = page.pageGapMm * pxPerMm;
 	const pageStep = pageHeight + pageGap;
-	const contentTop = PAGE_SIM.paddingTopMm * pxPerMm;
-	const contentBottom = PAGE_SIM.paddingBottomMm * pxPerMm;
+	const contentTop = page.marginTopMm * pxPerMm;
+	const contentBottom = page.marginBottomMm * pxPerMm;
 	const contentHeight = pageHeight - contentTop - contentBottom;
-	const docChildren = [];
-	editor.view.state.doc.forEach((node, offset) => {
-		docChildren.push({ node, offset });
-	});
 	const decorations = [];
 	const decorationKeys = [];
+	let simulatedShift = 0;
+	const movedElements = [];
 
 	const addDecoration = (docChild, gap) => {
 		if (!docChild || gap <= 1) return false;
@@ -120,22 +201,14 @@ function applyPageSimulation(canvas, editor) {
 		return true;
 	};
 
-	children.forEach((el, idx) => {
-		if (!el.classList.contains("hv-page-sim-next")) return;
-		const rawGap = el.style.getPropertyValue("--hv-page-sim-gap");
-		const gap = Number.parseFloat(rawGap);
-		addDecoration(docChildren[idx], Number.isFinite(gap) ? gap : 0);
-	});
+	for (const candidate of candidates) {
+		const el = candidate.element;
+		// Wurde ein Listenpunkt/Tabellenblock als Ganzes verschoben, darf ein
+		// darin liegender Fallback-Kandidat keinen zweiten Abstand erzeugen.
+		if (movedElements.some((parent) => parent !== el && parent.contains(el))) continue;
 
-	for (let idx = 0; idx < children.length; idx += 1) {
-		const el = children[idx];
-		const movedParent = el.parentElement?.closest(".hv-page-sim-next");
-		if (movedParent && movedParent !== el) continue;
-		if (el.classList.contains("hv-page-sim-next")) continue;
-
-		const rect = el.getBoundingClientRect();
-		const top = rect.top - canvasRect.top;
-		const height = rect.height;
+		const top = candidate.naturalTop - canvasRect.top + simulatedShift;
+		const height = candidate.height;
 		if (height <= 0 || height > contentHeight) continue;
 
 		const pageIndex = Math.max(0, Math.floor(Math.max(0, top) / pageStep));
@@ -149,8 +222,11 @@ function applyPageSimulation(canvas, editor) {
 		if (!inPageGap && top + height <= pageContentBottom + 1) continue;
 
 		const nextContentTop = pageTop + pageStep + contentTop;
-		addDecoration(docChildren[idx], Math.max(0, nextContentTop - top));
-		break;
+		const gap = Math.max(0, nextContentTop - top);
+		if (addDecoration(candidate, gap)) {
+			simulatedShift += gap;
+			movedElements.push(el);
+		}
 	}
 
 	const key = decorationKeys.join("|");
@@ -175,11 +251,12 @@ function applyFooterOverlays(canvas, editor) {
 		return;
 	}
 	const pm = editor?.view?.dom;
+	const page = currentPageSimulation();
 	const canvasRect = canvas.getBoundingClientRect();
-	const pxPerMm = canvasRect.width / PAGE_SIM.pageWidthMm;
-	const pageStep = (PAGE_SIM.pageMm + PAGE_SIM.pageGapMm) * pxPerMm;
-	const pageHeightPx = PAGE_SIM.pageMm * pxPerMm;
-	const bottomMarginPx = PAGE_SIM.paddingBottomMm * pxPerMm;
+	const pxPerMm = canvasRect.width / page.pageWidthMm;
+	const pageStep = (page.pageMm + page.pageGapMm) * pxPerMm;
+	const pageHeightPx = page.pageMm * pxPerMm;
+	const bottomMarginPx = page.marginBottomMm * pxPerMm;
 	// Seitenanzahl: jede page-sim-next-Marker ist ein Seitenumbruch → pages = breaks + 1.
 	const breaks = pm ? pm.querySelectorAll(".hv-page-sim-next").length : 0;
 	const pageCount = Math.max(1, breaks + 1);
@@ -728,7 +805,9 @@ export const Editor = ({
 	bausteinLayoutMode,
 	onToggleBausteinLayout,
 	bausteinPreviews,
+	placeholderPreviews,
 	footerHtml,
+	pageLayout,
 }) => {
 	const hasHtml = typeof template.htmlContent === "string";
 	const [safety, setSafety] = useState(null); // null = sicher; sonst { lost, added }
@@ -743,8 +822,9 @@ export const Editor = ({
 	useEffect(() => {
 		window.__hvBausteinLayoutMode = !!bausteinLayoutMode;
 		window.__hvBausteinLayoutPreviews = bausteinPreviews || {};
+		window.__hvPlaceholderLayoutPreviews = placeholderPreviews || {};
 		window.dispatchEvent(new CustomEvent("hv-baustein-preview-refresh"));
-	}, [bausteinLayoutMode, bausteinPreviews]);
+	}, [bausteinLayoutMode, bausteinPreviews, placeholderPreviews]);
 
 	const editor = useEditor({
 		extensions: [...buildExtensions(), PageSimulationExtension],
@@ -767,8 +847,9 @@ export const Editor = ({
 		// Footer-HTML im window ablegen — schedulePageSimulation liest es von dort
 		// (sonst müsste die Funktion durch die ganze Aufrufkette geschleift werden).
 		window.__hvEditorFooterHtml = (bausteinLayoutMode && footerHtml) || "";
+		window.__hvEditorPageLayout = pageLayout || {};
 		schedulePageSimulation(editor);
-	}, [bausteinLayoutMode, footerHtml, editor]);
+	}, [bausteinLayoutMode, footerHtml, pageLayout, editor]);
 
 	// Inhalt laden, wenn sich die Vorlage ändert (decorate -> TipTap). emitUpdate=false,
 	// damit Laden nicht als dirty zählt.
@@ -816,7 +897,7 @@ export const Editor = ({
 			if (raf) window.cancelAnimationFrame(raf);
 			ro.disconnect();
 		};
-	}, [editor, bausteinLayoutMode, revision, template.id, bausteinPreviews]);
+	}, [editor, bausteinLayoutMode, revision, template.id, bausteinPreviews, placeholderPreviews]);
 
 	useEffect(() => {
 		const dom = editor?.view?.dom;
@@ -935,6 +1016,14 @@ export const Editor = ({
 			<div className="editor-scroll" ref={editorRef}>
 				<div
 					className={`editor-canvas ${dragOver ? "drag-over" : ""} ${showGrid ? "" : "hv-no-grid"} ${bausteinLayoutMode ? "hv-baustein-layout" : ""}`}
+					style={{
+						"--hv-editor-page-width": `${pageLayout?.pageWidthMm || DEFAULT_PAGE_SIM.pageWidthMm}mm`,
+						"--hv-editor-page-height": `${pageLayout?.pageHeightMm || DEFAULT_PAGE_SIM.pageMm}mm`,
+						"--hv-editor-page-margin-top": `${pageLayout?.marginTopMm ?? DEFAULT_PAGE_SIM.marginTopMm}mm`,
+						"--hv-editor-page-margin-right": `${pageLayout?.marginRightMm ?? DEFAULT_PAGE_SIM.marginRightMm}mm`,
+						"--hv-editor-page-margin-bottom": `${pageLayout?.marginBottomMm ?? DEFAULT_PAGE_SIM.marginBottomMm}mm`,
+						"--hv-editor-page-margin-left": `${pageLayout?.marginLeftMm ?? DEFAULT_PAGE_SIM.marginLeftMm}mm`,
+					}}
 					onDragOver={(e) => {
 						e.preventDefault();
 						setDragOver(true);

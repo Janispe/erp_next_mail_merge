@@ -6,6 +6,7 @@ import { Sidebar } from "./components/Sidebar.jsx";
 import { PdfMaximized } from "./components/PdfMaximized.jsx";
 import { PfadMappingModal } from "./components/PfadMappingModal.jsx";
 import { BausteinPopover } from "./components/BausteinPopover.jsx";
+import { DynamicPreviewPopover } from "./components/DynamicPreviewPopover.jsx";
 import { JinjaTokenPopover } from "./components/JinjaTokenPopover.jsx";
 import { CURRENT_TEMPLATE, TEMPLATE_TREE } from "./data.js";
 import {
@@ -58,7 +59,9 @@ export const App = () => {
   const [druckSchwarzWeiss, setDruckSchwarzWeiss] = useState(false);
   const [bausteinLayoutMode, setBausteinLayoutMode] = useState(() => loadPref("bausteinLayoutMode", false));
   const [bausteinPreviewHtml, setBausteinPreviewHtml] = useState({});
+  const [placeholderPreviewHtml, setPlaceholderPreviewHtml] = useState({});
   const [editorPrintCss, setEditorPrintCss] = useState("");
+  const [editorPageLayout, setEditorPageLayout] = useState(null);
   // Gerendertes Page-Footer-HTML (mit Mock-Zahlungsdaten + Pfad-Zeile) für die
   // Per-Seite-Anzeige im Layoutmodus. Leer wenn der Modus aus ist.
   const [editorFooterHtml, setEditorFooterHtml] = useState("");
@@ -72,6 +75,7 @@ export const App = () => {
   const [bausteinKeys, setBausteinKeys] = useState({});
   const [mappingBaustein, setMappingBaustein] = useState(null);
   const [popoverBaustein, setPopoverBaustein] = useState(null); // { baustein, rect }
+  const [dynamicPreviewPopover, setDynamicPreviewPopover] = useState(null); // { token, group, rect }
   // Jinja-Token-Editor-Popover (loest window.prompt ab). { token, rect, save, kind }
   const [jinjaPopover, setJinjaPopover] = useState(null);
   // Vorlagen-Variablen (Definition + Wert/Pfad), im Editor bearbeitbar.
@@ -92,10 +96,16 @@ export const App = () => {
     let alive = true;
     loadEditorPrintFormatCss()
       .then((res) => {
-        if (alive) setEditorPrintCss(res.css || "");
+        if (alive) {
+          setEditorPrintCss(res.css || "");
+          setEditorPageLayout(res.page_layout || null);
+        }
       })
       .catch(() => {
-        if (alive) setEditorPrintCss("");
+        if (alive) {
+          setEditorPrintCss("");
+          setEditorPageLayout(null);
+        }
       });
     return () => { alive = false; };
   }, []);
@@ -457,11 +467,37 @@ export const App = () => {
       if (!name) return;
       const bs = (bausteine || []).find((b) => b.name === name) ||
         { name, title: name, inputs: [], outputs: [], standardpfade: [] };
+      setDynamicPreviewPopover(null);
+      setJinjaPopover(null);
       setPopoverBaustein({ baustein: bs, rect: e.detail.rect });
     };
     window.addEventListener("hv-baustein-popover", onPop);
     return () => window.removeEventListener("hv-baustein-popover", onPop);
   }, [bausteine]);
+
+  // Gerenderten Wert eines Platzhalters/einer Vorlagenvariable direkt am
+  // markierten Inhalt anzeigen. Das HTML selbst kommt aus derselben Split-
+  // Preview wie der Layoutmodus, damit Popover und Dokument identisch sind.
+  useEffect(() => {
+    const onPop = (e) => {
+      if (!e.detail || !e.detail.token) return;
+      const expression = String(e.detail.token)
+        .replace(/^\{\{\s*\$?\s*/, "")
+        .replace(/\s*\$?\s*\}\}$/, "")
+        .trim();
+      const rootName = (expression.match(/^[A-Za-z_]\w*/) || [""])[0];
+      const isTemplateVariable = (variables || []).some((v) => String(v.variable || "").trim() === rootName);
+      setPopoverBaustein(null);
+      setJinjaPopover(null);
+      setDynamicPreviewPopover({
+        token: e.detail.token,
+        group: isTemplateVariable ? "variable" : (e.detail.group || "person"),
+        rect: e.detail.rect || null,
+      });
+    };
+    window.addEventListener("hv-dynamic-preview-popover", onPop);
+    return () => window.removeEventListener("hv-dynamic-preview-popover", onPop);
+  }, [variables]);
 
   // Jinja-Token (z.B. {% if ... %}, {% endif %}) im Editor geklickt → Inline-
   // Popover statt window.prompt. NodeView (extensions.js) dispatcht den Save-
@@ -470,6 +506,8 @@ export const App = () => {
     const onPop = (e) => {
       console.debug("[hv-jinja-popover] App received event", e.detail);
       if (!e.detail) return;
+      setPopoverBaustein(null);
+      setDynamicPreviewPopover(null);
       setJinjaPopover({
         token: e.detail.token || "",
         rect: e.detail.rect || null,
@@ -574,8 +612,10 @@ export const App = () => {
         previewValues: previewVars,
       });
       setBausteinPreviewHtml(res.items || {});
+      setPlaceholderPreviewHtml(res.placeholders || {});
     } catch (e) {
       setBausteinPreviewHtml({});
+      setPlaceholderPreviewHtml({});
       bausteinPreviewSig.current = null;
     } finally {
       bausteinPreviewBusy.current = false;
@@ -602,7 +642,10 @@ export const App = () => {
 
   useEffect(() => {
     if (bausteinLayoutMode) refreshBausteinPreview({ force: true });
-    else setBausteinPreviewHtml({});
+    else {
+      setBausteinPreviewHtml({});
+      setPlaceholderPreviewHtml({});
+    }
   }, [bausteinLayoutMode, template.id, refreshBausteinPreview]);
 
   // Footer-HTML nachladen, sobald Layoutmodus an ist oder die Vorlage wechselt.
@@ -733,7 +776,9 @@ export const App = () => {
           bausteinLayoutMode={bausteinLayoutMode}
           onToggleBausteinLayout={() => setBausteinLayoutMode((v) => !v)}
           bausteinPreviews={bausteinPreviewHtml}
+          placeholderPreviews={placeholderPreviewHtml}
           footerHtml={editorFooterHtml}
+          pageLayout={editorPageLayout}
         />
         <Sidebar
           tab={tab}
@@ -820,6 +865,8 @@ export const App = () => {
           overrides={bausteinPaths[popoverBaustein.baustein.name] || {}}
           values={bausteinValues[popoverBaustein.baustein.name] || {}}
           bausteinKey={bausteinKeys[popoverBaustein.baustein.name] || ""}
+          previewHtml={bausteinPreviewHtml[popoverBaustein.baustein.name] || ""}
+          previewEnabled={bausteinLayoutMode}
           rect={popoverBaustein.rect}
           onClose={() => setPopoverBaustein(null)}
           onEditMapping={() => {
@@ -851,6 +898,16 @@ export const App = () => {
             schedulePreview();
             scheduleBausteinPreview();
           }}
+        />
+      )}
+
+      {dynamicPreviewPopover && (
+        <DynamicPreviewPopover
+          token={dynamicPreviewPopover.token}
+          group={dynamicPreviewPopover.group}
+          html={placeholderPreviewHtml[dynamicPreviewPopover.token] || ""}
+          rect={dynamicPreviewPopover.rect}
+          onClose={() => setDynamicPreviewPopover(null)}
         />
       )}
 

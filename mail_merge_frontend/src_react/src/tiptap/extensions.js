@@ -39,6 +39,24 @@ function bausteinLabel(token) {
 	return m ? m[1] : token || "";
 }
 
+function updatePlaceholderDom(dom, token, group) {
+	const layoutMode = !!window.__hvBausteinLayoutMode;
+	const previews = window.__hvPlaceholderLayoutPreviews || {};
+	const html = previews[token] || "";
+	dom.setAttribute("data-hv-kind", "placeholder");
+	dom.setAttribute("data-hv-token", token);
+	dom.setAttribute("data-group", group || "person");
+	if (layoutMode && html) {
+		dom.className = "placeholder-preview-node";
+		dom.innerHTML = html;
+		dom.title = `${innerOfPlaceholder(token)} · Klick für Vorschau`;
+	} else {
+		dom.className = "chip";
+		dom.textContent = innerOfPlaceholder(token);
+		dom.title = "Klick für Vorschau";
+	}
+}
+
 function updateBausteinDom(dom, token) {
 	const name = bausteinLabel(token);
 	const layoutMode = !!window.__hvBausteinLayoutMode;
@@ -177,6 +195,45 @@ export const PlaceholderNode = Node.create({
 			mergeAttributes(HTMLAttributes, { class: "chip", "data-hv-kind": "placeholder" }),
 			innerOfPlaceholder(node.attrs.token),
 		];
+	},
+	addNodeView() {
+		return ({ node }) => {
+			let current = node;
+			const dom = document.createElement("span");
+			updatePlaceholderDom(dom, node.attrs.token, node.attrs.group);
+			const onPreviewRefresh = () =>
+				updatePlaceholderDom(dom, current.attrs.token, current.attrs.group);
+			window.addEventListener("hv-baustein-preview-refresh", onPreviewRefresh);
+			const openPreview = (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				const rect = dom.getBoundingClientRect();
+				window.dispatchEvent(
+					new CustomEvent("hv-dynamic-preview-popover", {
+						detail: {
+							token: current.attrs.token,
+							group: current.attrs.group || "person",
+							rect: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom },
+						},
+					})
+				);
+			};
+			dom.addEventListener("click", openPreview);
+			return {
+				dom,
+				ignoreMutation: () => true,
+				destroy: () => {
+					window.removeEventListener("hv-baustein-preview-refresh", onPreviewRefresh);
+					dom.removeEventListener("click", openPreview);
+				},
+				update: (updated) => {
+					if (updated.type.name !== "hvPlaceholder") return false;
+					current = updated;
+					updatePlaceholderDom(dom, updated.attrs.token, updated.attrs.group);
+					return true;
+				},
+			};
+		};
 	},
 });
 

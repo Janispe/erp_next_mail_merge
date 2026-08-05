@@ -121,6 +121,34 @@ describe("Token-Round-Trip", () => {
 	});
 });
 
+describe("Klick-Vorschau", () => {
+	it("Platzhalter-Node dispatcht Token, Gruppe und Position", () => {
+		window.__hvBausteinLayoutMode = true;
+		window.__hvPlaceholderLayoutPreviews = {
+			"{{ person.nachname }}": '<span class="hv-preview-field">Schmitz</span>',
+		};
+		const editor = new Editor({
+			element: document.createElement("div"),
+			extensions: buildExtensions(),
+			content: decorateForTiptap("<p>{{ person.nachname }}</p>"),
+		});
+		let detail = null;
+		const onPreview = (event) => { detail = event.detail; };
+		window.addEventListener("hv-dynamic-preview-popover", onPreview);
+		const node = editor.view.dom.querySelector('[data-hv-kind="placeholder"]');
+		node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+		expect(detail?.token).toBe("{{ person.nachname }}");
+		expect(detail?.group).toBe("person");
+		expect(detail?.rect).toEqual(expect.objectContaining({ left: expect.any(Number), bottom: expect.any(Number) }));
+
+		window.removeEventListener("hv-dynamic-preview-popover", onPreview);
+		editor.destroy();
+		delete window.__hvBausteinLayoutMode;
+		delete window.__hvPlaceholderLayoutPreviews;
+	});
+});
+
 describe("if-Bedingungen (inline hvIf)", () => {
 	it("einfache truthy-Bedingung", () => {
 		const out = expectTokensPreserved("<p>a</p>\n{% if first %}\n<p>x</p>\n{% endif %}\n<p>b</p>");

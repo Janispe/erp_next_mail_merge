@@ -148,7 +148,18 @@ export async function loadBausteine() {
 }
 
 export async function loadEditorPrintFormatCss() {
-	if (!embedded) return { print_format: "", css: "" };
+	if (!embedded) return {
+		print_format: "",
+		css: "",
+		page_layout: {
+			pageWidthMm: 210,
+			pageHeightMm: 297,
+			marginTopMm: 20,
+			marginRightMm: 20,
+			marginBottomMm: 16,
+			marginLeftMm: 25,
+		},
+	};
 	return await rpc("editor_print_css", {});
 }
 

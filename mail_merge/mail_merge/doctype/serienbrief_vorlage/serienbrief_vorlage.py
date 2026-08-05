@@ -1785,6 +1785,13 @@ def render_editor_baustein_previews(
 		name = cstr(match.group(1)).strip()
 		if name and name not in names:
 			names.append(name)
+	placeholder_tokens: list[str] = []
+	for match in re.finditer(r"\{\{[\s\S]*?\}\}", source):
+		token = cstr(match.group(0))
+		if re.match(r"\{\{\s*(?:baustein|textbaustein)\(", token):
+			continue
+		if token not in placeholder_tokens:
+			placeholder_tokens.append(token)
 
 	template_defaults = _preview_defaults_for_template(
 		doc,
@@ -1870,7 +1877,20 @@ def render_editor_baustein_previews(
 			template_doc=doc,
 		)
 
-	return {"items": previews}
+	# Normale Platzhalter bleiben im ProseMirror-Dokument atomare Roh-Tokens,
+	# zeigen im Layoutmodus aber denselben gerenderten Wert wie die PDF-Vorschau.
+	# Dadurch beeinflussen lange Pfade wie ``objekt.wohnung....first_name`` nicht
+	# mehr künstlich Zeilen- und Seitenumbrüche.
+	placeholder_context = {**template_defaults, **(real_context or {})}
+	placeholder_previews: Dict[str, str] = {}
+	for token in placeholder_tokens:
+		placeholder_previews[token] = _render_split_preview_source(
+			token,
+			extra_context=placeholder_context,
+			template_doc=doc,
+		)
+
+	return {"items": previews, "placeholders": placeholder_previews}
 
 
 def _get_editor_print_format_name() -> str:
@@ -1914,20 +1934,20 @@ def _scope_print_format_css_for_editor(css: str) -> str:
 			i += 1
 		return -1
 
-	def scope_selector(selector: str) -> str | None:
+	def scope_selector(selector: str, root: str) -> str | None:
 		sel = selector.strip()
 		if not sel:
 			return None
 		if sel in {"body", "html", "html body"}:
-			return ".baustein-preview-body"
+			return root
 		for wrapper in wrappers:
 			if sel == wrapper:
-				return ".baustein-preview-body"
+				return root
 			if sel.startswith(wrapper + " "):
-				return ".baustein-preview-body " + sel[len(wrapper) :].strip()
+				return root + " " + sel[len(wrapper) :].strip()
 			if sel.startswith(wrapper + ":"):
-				return ".baustein-preview-body" + sel[len(wrapper) :]
-		return f".baustein-preview-body {sel}"
+				return root + sel[len(wrapper) :]
+		return f"{root} {sel}"
 
 	while pos < len(clean):
 		brace = clean.find("{", pos)
@@ -1945,7 +1965,11 @@ def _scope_print_format_css_for_editor(css: str) -> str:
 			if selector.lower().startswith("@font-face"):
 				out.append(f"{selector} {{{body}}}")
 			continue
-		scoped = [scope_selector(part) for part in selector.split(",")]
+		scoped = [
+			scope_selector(part, root)
+			for part in selector.split(",")
+			for root in (".tiptap-surface", ".baustein-preview-body")
+		]
 		scoped = [part for part in scoped if part]
 		if scoped:
 			out.append(f"{', '.join(scoped)} {{{body}}}")
@@ -1954,15 +1978,26 @@ def _scope_print_format_css_for_editor(css: str) -> str:
 
 @frappe.whitelist()
 def get_editor_print_format_css() -> Dict[str, str]:
+	from mail_merge.install import get_serienbrief_margins
+
 	print_format = _get_editor_print_format_name()
 	try:
 		html = frappe.db.get_value("Print Format", print_format, "html") or ""
 	except Exception:
 		html = ""
 	style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", html, flags=re.I | re.S)
+	margins = get_serienbrief_margins()
 	return {
 		"print_format": print_format,
 		"css": _scope_print_format_css_for_editor("\n".join(style_blocks)),
+		"page_layout": {
+			"pageWidthMm": 210,
+			"pageHeightMm": 297,
+			"marginTopMm": margins["margin_top"],
+			"marginRightMm": margins["margin_right"],
+			"marginBottomMm": margins["margin_bottom"],
+			"marginLeftMm": margins["margin_left"],
+		},
 	}
 
 

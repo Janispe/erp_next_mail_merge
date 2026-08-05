@@ -1771,10 +1771,9 @@ span[style*="color"] > .chip {
 }
 /* Layoutmodus: Baustein-Inhalt soll im Editor pixelgenau dort sitzen, wo er
    im PDF landet (vor allem für Kopfbereich-Bausteine relevant — sb-letterhead,
-   sb-address-window etc. positionieren sich absolut/per Float). Daher keine
-   eigene Padding/Border-Box, die den Inhalt nach unten schiebt. Stattdessen
-   ein dezenter Strich am linken Rand als Erkennungsmerkmal, Label kommt erst
-   beim Hover als Overlay rein. */
+   sb-address-window etc. positionieren sich absolut/per Float). Die Markierung
+   darf deshalb keine zusätzliche Höhe/Breite erzeugen: Hintergrund und inset
+   outline machen den Baustein sichtbar, ohne den Umbruch zu verändern. */
 .baustein-preview-node {
   display: inline-block;
   position: relative;
@@ -1782,9 +1781,10 @@ span[style*="color"] > .chip {
   margin: 0;
   padding: 0 0 0 4px;
   border: 0;
-  border-left: 2px solid rgba(91, 58, 153, 0.25);
+  border-left: 2px solid rgba(91, 58, 153, 0.55);
   border-radius: 0;
-  background: transparent;
+  background: rgba(91, 58, 153, 0.055);
+  box-shadow: inset 0 0 0 1px rgba(91, 58, 153, 0.12);
   color: inherit;
   font-family: inherit;
   font-size: inherit;
@@ -1795,7 +1795,8 @@ span[style*="color"] > .chip {
 }
 .baustein-preview-node:hover {
   border-left-color: rgba(91, 58, 153, 0.9);
-  background: rgba(241, 236, 248, 0.22);
+  background: rgba(91, 58, 153, 0.09);
+  box-shadow: inset 0 0 0 1px rgba(91, 58, 153, 0.28);
 }
 .baustein-preview-label {
   position: absolute;
@@ -1870,6 +1871,27 @@ span[style*="color"] > .chip {
   background: #fff2a8;
   border-radius: 2px;
   padding: 0 2px;
+}
+.placeholder-preview-node {
+  display: inline;
+  background: #fff2a8;
+  border-radius: 2px;
+  padding: 0 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+.placeholder-preview-node .hv-preview-field {
+  background: transparent;
+  border-radius: inherit;
+  padding: 0;
+}
+.placeholder-preview-node.ProseMirror-selectednode {
+  outline: 2px solid rgba(31, 115, 183, 0.4);
+  border-radius: 3px;
 }
 .baustein-preview-body .hv-preview-error {
   background: #fde2e1;
@@ -1996,17 +2018,21 @@ span[style*="color"] > .chip {
   position: relative; /* Anker für .editor-loading-overlay */
   background: var(--surface);
   box-sizing: border-box;
-  width: 210mm;
+  width: var(--hv-editor-page-width, 210mm);
   max-width: none;
   margin: 0 auto;
   border: 1px solid var(--border);
   border-radius: 2px;
   box-shadow: 0 12px 36px rgba(15, 23, 42, 0.12);
-  padding: 20mm 20mm 16mm 25mm;
+  padding:
+    var(--hv-editor-page-margin-top, 20mm)
+    var(--hv-editor-page-margin-right, 20mm)
+    var(--hv-editor-page-margin-bottom, 16mm)
+    var(--hv-editor-page-margin-left, 25mm);
   /* An den Inhalt anpassen (NICHT auf Viewport-Höhe strecken), sonst läuft langer
      Inhalt unten aus der weißen Karte heraus ("abgehackt"). Mindesthöhe für kurze Briefe. */
   align-self: flex-start;
-  min-height: 297mm;
+  min-height: var(--hv-editor-page-height, 297mm);
   flex: 0 0 auto;
 }
 .editor-canvas.drag-over {
@@ -2014,10 +2040,7 @@ span[style*="color"] > .chip {
   outline-offset: -6px;
 }
 .editor-canvas.hv-baustein-layout {
-  --hv-editor-page-height: 297mm;
   --hv-editor-page-gap: 14mm;
-  --hv-editor-page-margin-top: 20mm;
-  --hv-editor-page-margin-bottom: 16mm;
   overflow: visible;
   border: none;
   box-shadow: none;
@@ -2081,8 +2104,8 @@ span[style*="color"] > .chip {
 .editor-canvas.hv-baustein-layout .tiptap-surface::before {
   content: "";
   position: absolute;
-  left: -25mm;
-  right: -20mm;
+  left: calc(-1 * var(--hv-editor-page-margin-left, 25mm));
+  right: calc(-1 * var(--hv-editor-page-margin-right, 20mm));
   top: 0;
   bottom: 0;
   pointer-events: none;
@@ -2106,8 +2129,10 @@ span[style*="color"] > .chip {
    Position und z-Index vor. */
 .editor-canvas.hv-baustein-layout .hv-page-sim-footer-overlay {
   position: absolute;
-  left: 25mm;
-  right: 20mm;
+  left: var(--hv-editor-page-margin-left, 25mm);
+  right: var(--hv-editor-page-margin-right, 20mm);
+  background: rgba(91, 58, 153, 0.055);
+  box-shadow: inset 0 0 0 1px rgba(91, 58, 153, 0.12);
   z-index: 1;
   pointer-events: none;
 }
@@ -2118,8 +2143,8 @@ span[style*="color"] > .chip {
 .editor-canvas.hv-baustein-layout .tiptap-surface .hv-page-sim-next::before {
   content: "";
   position: absolute;
-  left: -25mm;
-  right: -20mm;
+  left: calc(-1 * var(--hv-editor-page-margin-left, 25mm));
+  right: calc(-1 * var(--hv-editor-page-margin-right, 20mm));
   top: calc(-1 * var(--hv-page-sim-gap));
   height: var(--hv-page-sim-gap);
   pointer-events: none;
@@ -2138,7 +2163,11 @@ span[style*="color"] > .chip {
   color: #1a1a1a;
   outline: none;
   width: 100%;
-  min-height: calc(297mm - 36mm);
+  min-height: calc(
+    var(--hv-editor-page-height, 297mm)
+    - var(--hv-editor-page-margin-top, 20mm)
+    - var(--hv-editor-page-margin-bottom, 16mm)
+  );
 }
 .tiptap-surface:focus { outline: none; }
 .tiptap-surface p { margin: 0; }
@@ -2774,6 +2803,143 @@ span[style*="color"] > .chip {
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
+}
+.bp-preview-section {
+  padding-top: 9px;
+}
+.bp-rendered-preview {
+  position: relative;
+  max-height: 230px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid rgba(91, 58, 153, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(91, 58, 153, 0.035);
+  color: #1a1a1a;
+  font-family: Arial, sans-serif;
+  font-size: 10pt;
+  line-height: 1.35;
+}
+.bp-rendered-preview::after {
+  content: "";
+  display: block;
+  clear: both;
+}
+.bp-rendered-preview .sb-letterhead {
+  margin-top: 0;
+}
+.bp-preview-empty {
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+/* Klick-Vorschau für gerenderte Platzhalter und Vorlagenvariablen. */
+.dynamic-preview-popover {
+  width: 360px;
+  background: white;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  cursor: default;
+}
+.dpp-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--surface-2);
+}
+.dpp-icon {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 5px;
+  color: #6b5200;
+  background: #fff2a8;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+}
+.dpp-icon-variable {
+  color: #175c46;
+  background: #dff5eb;
+}
+.dpp-heading {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.dpp-heading strong { font-size: 13px; }
+.dpp-kind {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.dpp-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 11px 12px 12px;
+}
+.dpp-label {
+  margin-top: 3px;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.dpp-value {
+  min-height: 38px;
+  max-height: 160px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid #ebd879;
+  border-radius: var(--radius-sm);
+  background: #fffbed;
+  color: #1a1a1a;
+  font-family: Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.dpp-value .hv-preview-field {
+  background: #fff2a8;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+.dpp-empty {
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+.dpp-expression {
+  overflow-wrap: anywhere;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  white-space: normal;
 }
 .bp-ports {
   display: flex;

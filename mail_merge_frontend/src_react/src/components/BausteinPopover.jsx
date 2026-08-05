@@ -42,6 +42,8 @@ export const BausteinPopover = ({
 	overrides,
 	values,
 	bausteinKey,
+	previewHtml,
+	previewEnabled,
 	rect,
 	onClose,
 	onEditMapping,
@@ -74,7 +76,11 @@ export const BausteinPopover = ({
 	const valueVars = (baustein.inputs || []).filter((inp) => !isDoctypeInput(inp));
 	const outputs = baustein.outputs || [];
 	const left = Math.max(8, Math.min(rect?.left ?? 100, window.innerWidth - 360));
-	const top = (rect?.bottom ?? 100) + 6;
+	const below = (rect?.bottom ?? 100) + 6;
+	const top = below + 520 <= window.innerHeight
+		? below
+		: Math.max(8, (rect?.top ?? 100) - 520 - 6);
+	const maxHeight = Math.max(240, window.innerHeight - top - 8);
 
 	const setValue = (name, val) => {
 		if (typeof onValuesChange !== "function") return;
@@ -89,7 +95,7 @@ export const BausteinPopover = ({
 	return (
 		<div
 			className="baustein-popover"
-			style={{ position: "fixed", left, top, zIndex: 320 }}
+			style={{ position: "fixed", left, top, zIndex: 320, maxHeight, overflowY: "auto" }}
 			onMouseDown={(e) => e.stopPropagation()}
 		>
 			<div className="bp-header">
@@ -100,6 +106,20 @@ export const BausteinPopover = ({
 				</button>
 			</div>
 			{baustein.description && <div className="bp-desc">{baustein.description}</div>}
+
+			<div className="bp-section bp-preview-section">
+				<div className="bp-section-label">Aktuelle Vorschau</div>
+				{previewHtml ? (
+					<div
+						className="bp-rendered-preview baustein-preview-body"
+						dangerouslySetInnerHTML={{ __html: previewHtml }}
+					/>
+				) : (
+					<div className="bp-preview-empty">
+						{previewEnabled ? "Für diesen Baustein ist keine Vorschau verfügbar." : "Vorschau ist im Layoutmodus verfügbar."}
+					</div>
+				)}
+			</div>
 
 			<div className="bp-section bp-key-section">
 				<label className="bp-value-label" title="Stabiler Schlüssel für Outputs dieses Bausteins">
