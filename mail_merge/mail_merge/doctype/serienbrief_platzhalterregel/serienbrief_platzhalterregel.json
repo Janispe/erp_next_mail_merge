@@ -1,0 +1,71 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-08-05 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "pfadmuster",
+  "sichtbarkeit",
+  "gruppe",
+  "bezeichnung",
+  "sortierung",
+  "beschreibung"
+ ],
+ "fields": [
+  {
+   "description": "Pfad ohne {{ }}; * und ? sind als Muster erlaubt, z. B. objekt.*.modified_by.",
+   "fieldname": "pfadmuster",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Pfad oder Muster",
+   "reqd": 1
+  },
+  {
+   "default": "Standard",
+   "fieldname": "sichtbarkeit",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Sichtbarkeit",
+   "options": "Standard\nErweitert\nDeaktiviert",
+   "reqd": 1
+  },
+  {
+   "description": "Optionale Gruppe im Editor, z. B. Mieter & Anrede.",
+   "fieldname": "gruppe",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Gruppe"
+  },
+  {
+   "description": "Optionaler verständlicher Name im Editor.",
+   "fieldname": "bezeichnung",
+   "fieldtype": "Data",
+   "label": "Bezeichnung"
+  },
+  {
+   "default": "100",
+   "fieldname": "sortierung",
+   "fieldtype": "Int",
+   "label": "Sortierung"
+  },
+  {
+   "fieldname": "beschreibung",
+   "fieldtype": "Small Text",
+   "label": "Beschreibung"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-08-05 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Mail Merge",
+ "name": "Serienbrief Platzhalterregel",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

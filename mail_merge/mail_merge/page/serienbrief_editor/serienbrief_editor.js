@@ -55,6 +55,16 @@ const NAV_ACTIONS = {
 	open_browser: () => {
 		frappe.set_route("serienbrief_browser");
 	},
+	// Zentrale Platzhalter-Konfiguration pro Ziel-DocType. Existiert noch kein
+	// Profil, öffnet Frappe ein vorausgefülltes neues Dokument.
+	open_placeholder_profile: (params) => {
+		const doctype = String(params.doctype || "").trim();
+		if (!doctype) return;
+		frappe.db.exists("Serienbrief Platzhalterprofil", doctype).then((exists) => {
+			if (exists) frappe.set_route("Form", "Serienbrief Platzhalterprofil", doctype);
+			else frappe.new_doc("Serienbrief Platzhalterprofil", { ziel_doctype: doctype });
+		});
+	},
 };
 
 // Deep-Link aus dem Vorlagen-Browser: route_options.hv_serienbrief_template wird

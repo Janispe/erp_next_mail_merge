@@ -12,7 +12,7 @@ import { CURRENT_TEMPLATE, TEMPLATE_TREE } from "./data.js";
 import {
   loadTree, loadTemplate, saveTemplate, copyTemplate, deleteTemplate, openDurchlauf,
   openClassicForm, openBrowser,
-  loadPlaceholderTree, loadBausteine, loadRecipients, renderPreview,
+  loadPlaceholderTree, openPlaceholderProfile, loadBausteine, loadRecipients, renderPreview,
   renderBausteinPreviews,
   loadEditorPrintFormatCss,
   loadEditorFooterHtml,
@@ -50,6 +50,10 @@ export const App = () => {
   const [copying, setCopying] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [placeholders, setPlaceholders] = useState([]);
+  const [advancedPlaceholders, setAdvancedPlaceholders] = useState([]);
+  const [placeholderMeta, setPlaceholderMeta] = useState({ standard_count: 0, advanced_count: 0, disabled_count: 0, profile: "" });
+  const [advancedPlaceholdersLoading, setAdvancedPlaceholdersLoading] = useState(false);
+  const placeholderLoadSequence = useRef(0);
   const [bausteine, setBausteine] = useState([]);
   const [recipients, setRecipients] = useState([]);
   const [previewPdf, setPreviewPdf] = useState("");
@@ -435,8 +439,49 @@ export const App = () => {
 
   // Platzhalter-Baum der aktuellen Vorlage laden (Objekt-Felder + Variablen + Referenzen).
   useEffect(() => {
-    loadPlaceholderTree(template.id).then(r => setPlaceholders(r.groups || [])).catch(() => {});
+    let alive = true;
+    const sequence = ++placeholderLoadSequence.current;
+    setAdvancedPlaceholders([]);
+    setAdvancedPlaceholdersLoading(false);
+    loadPlaceholderTree(template.id, "standard")
+      .then((r) => {
+        if (!alive || sequence !== placeholderLoadSequence.current) return;
+        setPlaceholders(r.groups || []);
+        setPlaceholderMeta({
+          standard_count: r.standard_count || 0,
+          advanced_count: r.advanced_count || 0,
+          disabled_count: r.disabled_count || 0,
+          profile: r.profile || "",
+        });
+      })
+      .catch(() => {
+        if (alive) {
+          setPlaceholders([]);
+          setPlaceholderMeta({ standard_count: 0, advanced_count: 0, disabled_count: 0, profile: "" });
+        }
+      });
+    return () => { alive = false; };
   }, [template.id]);
+
+  const loadAdvancedPlaceholders = useCallback(async () => {
+    if (!template.id || advancedPlaceholdersLoading || advancedPlaceholders.length) return;
+    const sequence = placeholderLoadSequence.current;
+    setAdvancedPlaceholdersLoading(true);
+    try {
+      const r = await loadPlaceholderTree(template.id, "advanced");
+      if (sequence !== placeholderLoadSequence.current) return;
+      setAdvancedPlaceholders(r.groups || []);
+      setPlaceholderMeta((prev) => ({
+        ...prev,
+        standard_count: r.standard_count ?? prev.standard_count,
+        advanced_count: r.advanced_count ?? prev.advanced_count,
+        disabled_count: r.disabled_count ?? prev.disabled_count,
+        profile: r.profile ?? prev.profile,
+      }));
+    } finally {
+      setAdvancedPlaceholdersLoading(false);
+    }
+  }, [template.id, advancedPlaceholdersLoading, advancedPlaceholders.length]);
 
   // Platzhalter-Baum zu flachen Pfaden (für den Pfad-Picker im Baustein-Mapping).
   const placeholderPaths = useMemo(() => {
@@ -456,9 +501,17 @@ export const App = () => {
         if (n.children) walk(n.children);
       }
     };
-    (placeholders || []).forEach((g) => walk(g.tree));
+    [...(placeholders || []), ...(advancedPlaceholders || [])].forEach((g) => walk(g.tree));
     return out;
-  }, [placeholders]);
+  }, [placeholders, advancedPlaceholders]);
+
+  // Pfad-Mapping und Vorlagenvariablen benötigen bei Bedarf auch seltene Pfade.
+  // Der große Baum wird erst beim Öffnen dieser Werkzeuge nachgeladen.
+  useEffect(() => {
+    if ((mappingBaustein || tab === "variables") && placeholderMeta.advanced_count > 0) {
+      loadAdvancedPlaceholders().catch(() => {});
+    }
+  }, [mappingBaustein, tab, placeholderMeta.advanced_count, loadAdvancedPlaceholders]);
 
   // Baustein-Chip im Editor geklickt -> Detail-Popover (Inputs/Outputs) aufklappen.
   useEffect(() => {
@@ -808,6 +861,11 @@ export const App = () => {
           recipient={recipient}
           recipients={recipients}
           placeholders={placeholders}
+          advancedPlaceholders={advancedPlaceholders}
+          placeholderMeta={placeholderMeta}
+          advancedPlaceholdersLoading={advancedPlaceholdersLoading}
+          onLoadAdvancedPlaceholders={loadAdvancedPlaceholders}
+          onOpenPlaceholderProfile={() => openPlaceholderProfile(template.haupt_verteil_objekt)}
           bausteine={bausteine}
           onChangeRecipient={changeRecipient}
           onSearchRecipients={searchRecipients}

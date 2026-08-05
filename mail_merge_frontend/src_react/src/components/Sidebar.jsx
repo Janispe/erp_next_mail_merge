@@ -271,13 +271,26 @@ const TreeNode = ({ node, depth, onInsert, expandAll, tokenTransform }) => {
   );
 };
 
-const PlaceholderPane = ({ groups, onInsert }) => {
+const PlaceholderPane = ({
+  groups, advancedGroups, meta, advancedLoading, onLoadAdvanced, onOpenProfile, onInsert,
+}) => {
   const [q, setQ] = useState("");
+  const [collection, setCollection] = useState("standard");
   const query = q.trim().toLowerCase();
+  const sourceGroups = collection === "advanced" ? advancedGroups : groups;
   const filtered = useMemo(
-    () => (groups || []).map(g => ({ ...g, tree: filterNodes(g.tree, query) })).filter(g => (g.tree || []).length),
-    [groups, query]
+    () => (sourceGroups || []).map(g => ({ ...g, tree: filterNodes(g.tree, query) })).filter(g => (g.tree || []).length),
+    [sourceGroups, query]
   );
+
+  useEffect(() => {
+    if (collection === "advanced" && !(advancedGroups || []).length && (meta?.advanced_count || 0) > 0) {
+      onLoadAdvanced?.().catch(() => {});
+    }
+  }, [collection, advancedGroups, meta?.advanced_count, onLoadAdvanced]);
+
+  const standardCount = meta?.standard_count ?? countTokens((groups || []).flatMap(g => g.tree || []));
+  const advancedCount = meta?.advanced_count || 0;
 
   return (
     <div className="ph-pane">
@@ -286,8 +299,37 @@ const PlaceholderPane = ({ groups, onInsert }) => {
           <span className="icon-left"><Icon name="search" size={13}/></span>
           <input className="ph-search-input" placeholder="Platzhalter suchen…" value={q} onChange={e => setQ(e.target.value)}/>
         </div>
-        <div className="ph-hint">Felder des Objekts (rekursiv) + Variablen · Klicken oder Ziehen zum Einfügen</div>
+        <div className="ph-collections" role="group" aria-label="Platzhalter-Sichtbarkeit">
+          <button
+            className={`ph-collection-btn ${collection === "standard" ? "active" : ""}`}
+            onClick={() => setCollection("standard")}
+          >
+            <Icon name="star" size={11}/> Häufig verwendet <span>{standardCount}</span>
+          </button>
+          <button
+            className={`ph-collection-btn ${collection === "advanced" ? "active" : ""}`}
+            onClick={() => setCollection("advanced")}
+          >
+            <Icon name="folder-open" size={11}/> Erweitert <span>{advancedCount}</span>
+          </button>
+        </div>
+        <div className="ph-hint-row">
+          <div className="ph-hint">
+            {collection === "standard"
+              ? "Übliche Felder, Variablen und konfigurierte Pfade"
+              : "Alle verfügbaren Pfade – deaktivierte bleiben ausgeblendet"}
+          </div>
+          {!!onOpenProfile && (
+            <button className="ph-profile-btn" onClick={onOpenProfile} title="Platzhalterprofil konfigurieren">
+              <Icon name="edit" size={12}/> Verwalten
+            </button>
+          )}
+        </div>
       </div>
+
+      {collection === "advanced" && advancedLoading && (
+        <div className="ph-loading"><span className="spinner"/> Erweiterte Pfade werden geladen…</div>
+      )}
 
       {filtered.map(g => (
         <div className="ph-group" key={g.key}>
@@ -303,7 +345,11 @@ const PlaceholderPane = ({ groups, onInsert }) => {
       ))}
 
       {filtered.length === 0 && (
-        <div className="empty-hint" style={{ marginTop: 24 }}>Keine Platzhalter{query ? ` für „${q}"` : ""}.</div>
+        <div className="empty-hint" style={{ marginTop: 24 }}>
+          {collection === "advanced" && advancedLoading
+            ? ""
+            : `Keine Platzhalter${query ? ` für „${q}"` : ""}.`}
+        </div>
       )}
     </div>
   );
@@ -830,7 +876,8 @@ const VariablesPane = ({ variables, onChange, onInsert, placeholderPaths, editab
 // =========================
 export const Sidebar = ({
   tab, onTab, template, recipient, recipients,
-  placeholders, bausteine,
+  placeholders, advancedPlaceholders, placeholderMeta, advancedPlaceholdersLoading,
+  onLoadAdvancedPlaceholders, onOpenPlaceholderProfile, bausteine,
   onChangeRecipient, onSearchRecipients,
   previewPdf, previewLoading, previewError, previewMode, onRefreshPreview,
   onInsertPlaceholder, onInsertBaustein, onLoadBausteinPreview, onMaximizePreview, onResizeStart,
@@ -838,7 +885,9 @@ export const Sidebar = ({
   druckSchwarzWeiss, onDruckSchwarzWeissChange,
   variablesForPreview, previewVars, onPreviewVarChange,
 }) => {
-  const phCount = (placeholders || []).reduce((n, g) => n + countTokens(g.tree), 0);
+  // „Erweitert“ enthält jetzt bewusst auch die Standardfelder. Deshalb ist sein
+  // Zähler bereits die Gesamtzahl und darf nicht mit Standard addiert werden.
+  const phCount = placeholderMeta?.advanced_count || placeholderMeta?.standard_count || 0;
   const bsCount = (bausteine || []).length;
   const varCount = (variables || []).length;
 
@@ -870,7 +919,17 @@ export const Sidebar = ({
             onPreviewVarChange={onPreviewVarChange}
           />
         )}
-        {tab === "placeholders" && <PlaceholderPane groups={placeholders || []} onInsert={onInsertPlaceholder}/>}
+        {tab === "placeholders" && (
+          <PlaceholderPane
+            groups={placeholders || []}
+            advancedGroups={advancedPlaceholders || []}
+            meta={placeholderMeta || {}}
+            advancedLoading={advancedPlaceholdersLoading}
+            onLoadAdvanced={onLoadAdvancedPlaceholders}
+            onOpenProfile={template.haupt_verteil_objekt ? onOpenPlaceholderProfile : null}
+            onInsert={onInsertPlaceholder}
+          />
+        )}
         {tab === "bausteine" && (
           <BausteinePane
             items={bausteine || []}

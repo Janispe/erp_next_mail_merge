@@ -172,19 +172,45 @@ export async function loadEditorFooterHtml(templateName) {
 
 // Voller Platzhalter-Baum (Parität zum alten Formular-Picker): Gruppen mit
 // rekursivem Feld-Baum, abgeleitet aus dem Iterationsobjekt + Variablen + Referenzen.
-export async function loadPlaceholderTree(name) {
+export async function loadPlaceholderTree(name, mode = "standard") {
 	if (!embedded) {
 		// Mock: flache Gruppen in Baum-Form überführen
+		const groups = PLACEHOLDER_GROUPS.map((g) => ({
+			key: g.key,
+			label: g.label,
+			icon: g.icon,
+			tree: g.items.map((it) => ({ label: it.label, token: it.token, type: "", children: [] })),
+		}));
 		return {
-			groups: PLACEHOLDER_GROUPS.map((g) => ({
-				key: g.key,
-				label: g.label,
-				icon: g.icon,
-				tree: g.items.map((it) => ({ label: it.label, token: it.token, type: "", children: [] })),
-			})),
+			groups: mode === "advanced" ? [] : groups,
+			standard_count: PLACEHOLDER_GROUPS.reduce((total, group) => total + group.items.length, 0),
+			advanced_count: PLACEHOLDER_GROUPS.reduce((total, group) => total + group.items.length, 0),
+			disabled_count: 0,
 		};
 	}
-	return await rpc("placeholder_tree", { name: name || "" });
+	return await rpc("placeholder_tree", { name: name || "", mode });
+}
+
+// Zentrales Profil für die Platzhalterdarstellung im normalen Frappe-Formular
+// öffnen. Die Konfiguration lebt bewusst im Mail-Merge-Modul, nicht am Ziel-DocType.
+export async function openPlaceholderProfile(doctype) {
+	if (!embedded || !doctype) return { ok: true, mock: true };
+	// Der Editor und das Frappe-Desk laufen auf derselben Origin. Direkt über das
+	// Eltern-Desk navigieren, damit der Button auch in bereits geöffneten Desk-
+	// Sitzungen funktioniert, deren RPC-Host die neue Aktion noch nicht kennt.
+	try {
+		const desk = window.parent && window.parent.frappe;
+		if (desk?.db?.exists && desk?.set_route && desk?.new_doc) {
+			const exists = await desk.db.exists("Serienbrief Platzhalterprofil", doctype);
+			if (exists) await desk.set_route("Form", "Serienbrief Platzhalterprofil", doctype);
+			else await desk.new_doc("Serienbrief Platzhalterprofil", { ziel_doctype: doctype });
+			return { ok: true };
+		}
+	} catch (_) {
+		// Falls der direkte Desk-Zugriff in einer späteren Einbettung nicht möglich
+		// ist, bleibt die strikt erlaubte RPC-Navigation als Fallback erhalten.
+	}
+	return await rpc("open_placeholder_profile", { doctype });
 }
 
 // Echte Zielobjekt (z. B. Mietverträge) für den Vorschau-Picker.

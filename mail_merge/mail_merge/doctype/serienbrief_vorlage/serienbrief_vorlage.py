@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from fnmatch import fnmatchcase
 import json
 import re
 from typing import Any, Dict, List
@@ -3026,8 +3027,219 @@ def _build_iteration_tree(dt):
 	return nodes
 
 
+_PLACEHOLDER_GROUP_ORDER = {
+	"Allgemein": 10,
+	"Vorlagen-Variablen": 20,
+	"Mieter & Anrede": 30,
+	"Mietvertrag": 40,
+	"Wohnung & Immobilie": 50,
+	"Adresse": 60,
+	"Finanzen & Zahlung": 70,
+	"Zeitraum & Termine": 80,
+	"Grunddaten": 90,
+	"Weitere Felder": 900,
+}
+
+
+def _clean_placeholder_path(value: str | None) -> str:
+	path = cstr(value or "").strip()
+	path = re.sub(r"^\{\{\s*\$?\s*", "", path)
+	path = re.sub(r"\s*\$?\s*\}\}$", "", path)
+	return path.strip()
+
+
+def _load_placeholder_profile(doctype: str) -> Dict[str, Any]:
+	"""Lädt nur die zentrale Mail-Merge-Konfiguration. Die fachlichen DocTypes
+	werden absichtlich nicht um UI-Felder oder Platzhalter-Metadaten erweitert."""
+	profile: Dict[str, Any] = {
+		"name": "",
+		"direkte_felder_standard": True,
+		"nicht_konfigurierte_pfade": "Erweitert",
+		"rules": [],
+	}
+	if not doctype or not frappe.db.exists("DocType", "Serienbrief Platzhalterprofil"):
+		return profile
+	profile_name = frappe.db.exists("Serienbrief Platzhalterprofil", doctype)
+	if not profile_name:
+		return profile
+
+	doc = frappe.get_doc("Serienbrief Platzhalterprofil", profile_name)
+	profile.update(
+		{
+			"name": doc.name,
+			"direkte_felder_standard": bool(cint(doc.direkte_felder_standard)),
+			"nicht_konfigurierte_pfade": doc.nicht_konfigurierte_pfade or "Erweitert",
+		}
+	)
+	for row in doc.get("regeln") or []:
+		pattern = _clean_placeholder_path(row.pfadmuster)
+		if not pattern:
+			continue
+		profile["rules"].append(
+			{
+				"pattern": pattern,
+				"visibility": row.sichtbarkeit or "Standard",
+				"group": cstr(row.gruppe or "").strip(),
+				"label": cstr(row.bezeichnung or "").strip(),
+				"description": cstr(row.beschreibung or "").strip(),
+				"sort": cint(row.sortierung) or 100,
+			}
+		)
+	return profile
+
+
+def _matching_placeholder_rule(path: str, rules: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+	if not path:
+		return None
+	needle = path.casefold()
+	matches = []
+	for rule in rules:
+		pattern = cstr(rule.get("pattern") or "").casefold()
+		if not pattern or not fnmatchcase(needle, pattern):
+			continue
+		exact = "*" not in pattern and "?" not in pattern
+		specificity = len(pattern.replace("*", "").replace("?", ""))
+		matches.append(((1 if exact else 0, specificity), rule))
+	return max(matches, key=lambda item: item[0])[1] if matches else None
+
+
+def _automatic_placeholder_group(path: str, label: str, fallback: str) -> str:
+	text = f"{path} {label}".casefold()
+	if re.search(r"anrede|mieter|person|kontakt|eigentümer|eigentuemer|vorname|nachname", text):
+		return "Mieter & Anrede"
+	if re.search(r"mietvertrag|mietverhältnis|mietverhaeltnis|vertragspartner|kündigung|kuendigung", text):
+		return "Mietvertrag"
+	# Nicht auf das technische Root-Wort ``objekt`` matchen: Jeder dynamische
+	# Platzhalter beginnt damit und würde sonst fälschlich in dieser Gruppe landen.
+	if re.search(r"wohnung|immobilie|gebäude|gebaeude|einheit|keller|mitvermietet", text):
+		return "Wohnung & Immobilie"
+	if re.search(r"adresse|anschrift|straße|strasse|plz|postleitzahl|ort\b|stadt|land\b", text):
+		return "Adresse"
+	if re.search(r"miete|betrag|konto|iban|bic|bank|zahlung|kosten|saldo|forderung|kaution", text):
+		return "Finanzen & Zahlung"
+	if re.search(r"datum|beginn|ende|frist|zeitraum|fällig|faellig|abschluss|\bvon\b|\bbis\b", text):
+		return "Zeitraum & Termine"
+	return fallback or "Weitere Felder"
+
+
+def _placeholder_node_policy(
+	node: Dict[str, Any], source_key: str, source_label: str, depth: int, profile: Dict[str, Any]
+) -> Dict[str, Any]:
+	path = _clean_placeholder_path(node.get("token"))
+	rule = _matching_placeholder_rule(path, profile.get("rules") or [])
+	if rule:
+		visibility = rule.get("visibility") or "Standard"
+	else:
+		always_standard = source_key in {"allgemein", "variablen"}
+		direct_object_field = source_key == "objekt" and depth == 0 and profile["direkte_felder_standard"]
+		required_reference = source_key.startswith("ref_") and depth == 0
+		visibility = (
+			"Standard"
+			if always_standard or direct_object_field or required_reference
+			else profile.get("nicht_konfigurierte_pfade") or "Erweitert"
+		)
+
+	fallback_group = (
+		"Allgemein"
+		if source_key == "allgemein"
+		else "Vorlagen-Variablen"
+		if source_key == "variablen"
+		else source_label
+		if source_key.startswith("ref_")
+		else "Grunddaten"
+	)
+	return {
+		"path": path,
+		"visibility": visibility,
+		"group": (rule or {}).get("group") or _automatic_placeholder_group(path, node.get("label") or "", fallback_group),
+		"label": (rule or {}).get("label") or node.get("label") or path,
+		"description": (rule or {}).get("description") or "",
+		"sort": (rule or {}).get("sort") or 100,
+	}
+
+
+def _filter_placeholder_node(
+	node: Dict[str, Any], source_key: str, source_label: str, depth: int,
+	profile: Dict[str, Any], visibility: str,
+) -> Dict[str, Any] | None:
+	policy = _placeholder_node_policy(node, source_key, source_label, depth, profile)
+	children = []
+	for child in node.get("children") or []:
+		filtered = _filter_placeholder_node(child, source_key, source_label, depth + 1, profile, visibility)
+		if filtered:
+			children.append(filtered)
+	children.sort(key=lambda item: (cint(item.get("sort_order")) or 100, cstr(item.get("label")).casefold()))
+
+	visible = (
+		policy["visibility"] in {"Standard", "Erweitert"}
+		if visibility == "Alle"
+		else policy["visibility"] == visibility
+	)
+	token = node.get("token") if visible else ""
+	if not token and not children:
+		return None
+	return {
+		"label": policy["label"] if token else node.get("label") or "",
+		"token": token,
+		"type": node.get("type") or "",
+		"children": children,
+		"description": policy["description"] if token else "",
+		"sort_order": policy["sort"],
+	}
+
+
+def _count_placeholder_visibility(groups: List[Dict[str, Any]], profile: Dict[str, Any]) -> Dict[str, int]:
+	counts = {"Standard": 0, "Erweitert": 0, "Deaktiviert": 0}
+
+	def walk(nodes, source_key, source_label, depth=0):
+		for node in nodes or []:
+			if node.get("token"):
+				policy = _placeholder_node_policy(node, source_key, source_label, depth, profile)
+				key = policy["visibility"] if policy["visibility"] in counts else "Erweitert"
+				counts[key] += 1
+			walk(node.get("children"), source_key, source_label, depth + 1)
+
+	for group in groups:
+		walk(group.get("tree"), group.get("key") or "", group.get("label") or "")
+	return counts
+
+
+def _group_placeholder_tree(
+	groups: List[Dict[str, Any]], profile: Dict[str, Any], visibility: str
+) -> List[Dict[str, Any]]:
+	result: Dict[str, Dict[str, Any]] = {}
+	for source in groups:
+		source_key = source.get("key") or ""
+		source_label = source.get("label") or ""
+		for node in source.get("tree") or []:
+			filtered = _filter_placeholder_node(node, source_key, source_label, 0, profile, visibility)
+			if not filtered:
+				continue
+			policy = _placeholder_node_policy(node, source_key, source_label, 0, profile)
+			group_label = policy["group"]
+			entry = result.setdefault(
+				group_label,
+				{
+					"key": frappe.scrub(group_label),
+					"label": group_label,
+					"icon": source.get("icon") or "tag",
+					"tree": [],
+				},
+			)
+			entry["tree"].append(filtered)
+
+	for entry in result.values():
+		entry["tree"].sort(
+			key=lambda item: (cint(item.get("sort_order")) or 100, cstr(item.get("label")).casefold())
+		)
+	return sorted(
+		result.values(),
+		key=lambda entry: (_PLACEHOLDER_GROUP_ORDER.get(entry["label"], 500), entry["label"].casefold()),
+	)
+
+
 @frappe.whitelist()
-def get_editor_placeholder_tree(name: str | None = None) -> Dict[str, Any]:
+def get_editor_placeholder_tree(name: str | None = None, mode: str | None = None) -> Dict[str, Any]:
 	"""Voller Platzhalter-Baum wie im alten Formular-Picker: Gruppen Allgemein,
 	Vorlagen-Variablen, Iterationsobjekt (rekursiver Feld-Baum) und Referenz
 	(aus den Vorlagen-/Baustein-Anforderungen)."""
@@ -3112,7 +3324,18 @@ def get_editor_placeholder_tree(name: str | None = None) -> Dict[str, Any]:
 				}
 			)
 
-	return {"groups": groups, "doctype": dt}
+	profile = _load_placeholder_profile(dt)
+	counts = _count_placeholder_visibility(groups, profile)
+	selected_mode = "Alle" if cstr(mode).strip().casefold() == "advanced" else "Standard"
+	return {
+		"groups": _group_placeholder_tree(groups, profile, selected_mode),
+		"doctype": dt,
+		"mode": "advanced" if selected_mode == "Alle" else "standard",
+		"standard_count": counts["Standard"],
+		"advanced_count": counts["Standard"] + counts["Erweitert"],
+		"disabled_count": counts["Deaktiviert"],
+		"profile": profile.get("name") or "",
+	}
 
 
 @frappe.whitelist()

@@ -1,0 +1,93 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:ziel_doctype",
+ "creation": "2026-08-05 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "ziel_doctype",
+  "beschreibung",
+  "section_defaults",
+  "direkte_felder_standard",
+  "nicht_konfigurierte_pfade",
+  "section_rules",
+  "regeln"
+ ],
+ "fields": [
+  {
+   "fieldname": "ziel_doctype",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Ziel-DocType",
+   "options": "DocType",
+   "reqd": 1,
+   "search_index": 1,
+   "unique": 1
+  },
+  {
+   "description": "Zentrale Darstellung der im Serienbrief-Editor angebotenen Platzhalter. Die fachlichen DocTypes werden nicht verändert.",
+   "fieldname": "beschreibung",
+   "fieldtype": "Small Text",
+   "label": "Beschreibung"
+  },
+  {
+   "fieldname": "section_defaults",
+   "fieldtype": "Section Break",
+   "label": "Standardverhalten"
+  },
+  {
+   "default": "1",
+   "description": "Zeigt direkte Felder des Zielobjekts im normalen Bereich. Verknüpfte Unterfelder bleiben standardmäßig unter Erweitert.",
+   "fieldname": "direkte_felder_standard",
+   "fieldtype": "Check",
+   "label": "Direkte Felder als Standard anzeigen"
+  },
+  {
+   "default": "Erweitert",
+   "description": "Gilt für Pfade, auf die keine Regel zutrifft.",
+   "fieldname": "nicht_konfigurierte_pfade",
+   "fieldtype": "Select",
+   "label": "Nicht konfigurierte Pfade",
+   "options": "Erweitert\nDeaktiviert",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_rules",
+   "fieldtype": "Section Break",
+   "label": "Platzhalterregeln"
+  },
+  {
+   "description": "Exakte Pfade oder Muster mit * und ?. Exakte Regeln haben Vorrang vor Mustern.",
+   "fieldname": "regeln",
+   "fieldtype": "Table",
+   "label": "Regeln",
+   "options": "Serienbrief Platzhalterregel"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-05 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Mail Merge",
+ "name": "Serienbrief Platzhalterprofil",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "ziel_doctype"
+}
