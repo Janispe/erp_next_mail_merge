@@ -1,0 +1,104 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-08-05 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "vorlage",
+  "version_number",
+  "version_label",
+  "source",
+  "change_summary",
+  "is_protected",
+  "restored_from",
+  "content_hash",
+  "snapshot"
+ ],
+ "fields": [
+  {
+   "fieldname": "vorlage",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Vorlage",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "version_number",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Version",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "version_label",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Bezeichnung"
+  },
+  {
+   "default": "Gespeichert",
+   "fieldname": "source",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Art",
+   "options": "Gespeichert\nAusgangsstand\nWiederherstellung\nImport\nSystemänderung"
+  },
+  {
+   "fieldname": "change_summary",
+   "fieldtype": "Small Text",
+   "label": "Änderungen",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_protected",
+   "fieldtype": "Check",
+   "label": "Geschützt"
+  },
+  {
+   "fieldname": "restored_from",
+   "fieldtype": "Link",
+   "label": "Wiederhergestellt aus",
+   "options": "Serienbrief Vorlagenversion",
+   "read_only": 1
+  },
+  {
+   "fieldname": "content_hash",
+   "fieldtype": "Data",
+   "label": "Inhaltsprüfsumme",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "snapshot",
+   "fieldtype": "Long Text",
+   "label": "Snapshot (JSON)",
+   "read_only": 1,
+   "reqd": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-05 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Mail Merge",
+ "name": "Serienbrief Vorlagenversion",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

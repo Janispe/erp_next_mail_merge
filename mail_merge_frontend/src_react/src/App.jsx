@@ -8,6 +8,7 @@ import { PfadMappingModal } from "./components/PfadMappingModal.jsx";
 import { BausteinPopover } from "./components/BausteinPopover.jsx";
 import { DynamicPreviewPopover } from "./components/DynamicPreviewPopover.jsx";
 import { JinjaTokenPopover } from "./components/JinjaTokenPopover.jsx";
+import { VersionHistoryModal } from "./components/VersionHistoryModal.jsx";
 import { CURRENT_TEMPLATE, TEMPLATE_TREE } from "./data.js";
 import {
   loadTree, loadTemplate, saveTemplate, copyTemplate, deleteTemplate, openDurchlauf,
@@ -17,6 +18,7 @@ import {
   loadEditorPrintFormatCss,
   loadEditorFooterHtml,
   uploadImage, embedded,
+  loadTemplateVersionDraft,
 } from "./api.js";
 import { validateJinjaBalance } from "./tiptap/validateJinja.js";
 import { loadPref, savePref } from "./persist.js";
@@ -49,6 +51,9 @@ export const App = () => {
   const [saving, setSaving] = useState(false);
   const [copying, setCopying] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [versionRefreshKey, setVersionRefreshKey] = useState(0);
+  const [pendingRestore, setPendingRestore] = useState(null);
   const [placeholders, setPlaceholders] = useState([]);
   const [advancedPlaceholders, setAdvancedPlaceholders] = useState([]);
   const [placeholderMeta, setPlaceholderMeta] = useState({ standard_count: 0, advanced_count: 0, disabled_count: 0, profile: "" });
@@ -175,6 +180,7 @@ export const App = () => {
         setBausteinKeys(t.bausteinKeys || {});
         setVariables(t.variables || []);
         setPreviewVars({});
+        setPendingRestore(null);
         setDirty(false);
         // Zuletzt geöffnete Vorlage merken, damit sie beim Neuladen wieder erscheint.
         try { savePref("lastTemplateId", t.id || id); } catch (_) {}
@@ -210,6 +216,7 @@ export const App = () => {
       });
       setTitle(t.title);
     }
+    setPendingRestore(null);
     setDirty(false);
   }, []);
 
@@ -246,8 +253,8 @@ export const App = () => {
 
   // Gibt true bei Erfolg zurück (für Aufrufer wie Kopieren/„In Serienbrief laden",
   // die vor ihrer Aktion erst speichern wollen).
-  const save = async () => {
-    if (!template.canWrite || !dirty || saving) return false;
+  const save = async ({ forceNewVersion = false } = {}) => {
+    if (!template.canWrite || (!dirty && !forceNewVersion) || saving) return false;
     // Harte Sperre: Vorlage round-trippt nicht verlustfrei (Token-Erhalt-Check beim Laden).
     if (editorSafety) {
       alert(
@@ -269,8 +276,19 @@ export const App = () => {
     }
     setSaving(true);
     try {
-      const res = await saveTemplate(template.id, html, bausteinPaths, bausteinValues, bausteinKeys, variables, title);
+      const res = await saveTemplate(
+        template.id,
+        html,
+        bausteinPaths,
+        bausteinValues,
+        bausteinKeys,
+        variables,
+        title,
+        pendingRestore?.name,
+        forceNewVersion,
+      );
       setDirty(false);
+      setPendingRestore(null);
       // autoname = format:{title}: bei Titeländerung benennt das Backend um -> neue id.
       const renamed = res.id && res.id !== template.id;
       setTemplate(prev => ({
@@ -286,6 +304,7 @@ export const App = () => {
       if (renamed) {
         try { const { groups } = await loadTree(); if (groups && groups.length) setTree(groups); } catch (_) {}
       }
+      setVersionRefreshKey((value) => value + 1);
       // Return-Shape enthält die (ggf. umbenannte) neue ID + Titel, damit Caller
       // wie handleOpenClassic/handleLoadDurchlauf nach `await save` die richtige ID
       // benutzen koennen statt das stale `template.id` aus ihrer Closure.
@@ -313,6 +332,11 @@ export const App = () => {
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, []);
+
+  const handleSaveNewVersion = useCallback(async () => {
+    if (!template.id || !template.canWrite || saving || deleting) return;
+    await saveRef.current({ forceNewVersion: true });
+  }, [template.id, template.canWrite, saving, deleting]);
 
   // „Kopieren" -> Vorlage duplizieren und die Kopie öffnen. Die Kopie basiert auf
   // dem gespeicherten Stand, daher offene Änderungen vorher speichern.
@@ -368,6 +392,34 @@ export const App = () => {
       setDeleting(false);
     }
   }, [template.id, title, deleting, copying, saving, onTemplateSelect]);
+
+  // Historischer Snapshot -> nur als ungespeicherten Entwurf in den Editor laden.
+  // Erst ein spaeterer expliziter Speichervorgang erzeugt die neue Version.
+  const handleRestoreVersion = useCallback(async (versionName) => {
+    if (!template.id || saving) return false;
+    setLoadingTemplate(true);
+    try {
+      const draft = await loadTemplateVersionDraft(template.id, versionName);
+      setTemplate(draft);
+      setTitle(draft.title);
+      setBausteinPaths(draft.bausteinPaths || {});
+      setBausteinValues(draft.bausteinValues || {});
+      setBausteinKeys(draft.bausteinKeys || {});
+      setVariables(draft.variables || []);
+      setPreviewVars({});
+      setPendingRestore({
+        name: draft.restoredFromVersion || versionName,
+        number: draft.restoredFromNumber || "?",
+      });
+      setDirty(true);
+      return draft;
+    } catch (e) {
+      alert("Wiederherstellen fehlgeschlagen: " + ((e && e.message) || e));
+      return false;
+    } finally {
+      setLoadingTemplate(false);
+    }
+  }, [template.id, saving]);
 
   // „Klassisch" -> Escape-Hatch zur Standard-Frappe-Form. Nötig für den
   // geführten Mapping-Wizard und Spezialfälle (Mehrfach-Baustein-Mapping über
@@ -745,6 +797,17 @@ export const App = () => {
     if (embedded && tab === "preview" && template.id) refreshPreview();
   }, [tab, template.id, recipient && recipient.id]);
 
+  useEffect(() => {
+    if (!pendingRestore || !template.id) return undefined;
+    previewSig.current = null;
+    bausteinPreviewSig.current = null;
+    const timer = window.setTimeout(() => {
+      refreshPreview({ force: true });
+      if (bausteinLayoutMode) refreshBausteinPreview({ force: true });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [pendingRestore?.name, template.htmlContent]);
+
   // Variablen-/Baustein-Pfad-/Vorschau-Wert-Änderungen (nicht über den Editor)
   // -> debounced nachrendern. Cleanup-Return killt den 4s-Timer beim
   // Vorlagen-/Zielobjekt-Wechsel oder Unmount, damit ein altes setTimeout
@@ -806,14 +869,27 @@ export const App = () => {
 
         <div className="meta">
           {dirty ? (
-            <span style={{ color: "var(--warn)" }}>● Ungespeicherte Änderungen</span>
+            <span style={{ color: "var(--warn)" }}>
+              ● {pendingRestore ? `Wiederherstellung aus V${pendingRestore.number} · noch nicht gespeichert` : "Ungespeicherte Änderungen"}
+            </span>
           ) : (
             <span><span className="dot"/> Gespeichert · {template.modified}</span>
           )}
         </div>
 
-        <button className="btn" onClick={save} disabled={!dirty || !template.canWrite || saving || deleting} title={!template.canWrite ? "Keine Schreibberechtigung" : ""}>
+        <button className="btn" onClick={() => save()} disabled={!dirty || !template.canWrite || saving || deleting} title={!template.canWrite ? "Keine Schreibberechtigung" : ""}>
           <Icon name="save" size={14}/> {saving ? "Speichert …" : "Speichern"}
+        </button>
+        <button
+          className="btn ghost"
+          onClick={handleSaveNewVersion}
+          disabled={!template.id || !template.canWrite || saving || deleting}
+          title={!template.canWrite ? "Keine Schreibberechtigung" : "Aktuellen Stand als eigenen Versions-Meilenstein speichern"}
+        >
+          <Icon name="plus" size={14}/> Neue Version
+        </button>
+        <button className="btn ghost" onClick={() => setVersionsOpen(true)} disabled={!template.id || loadingTemplate || deleting} title="Versionshistorie öffnen">
+          <Icon name="clock" size={14}/> Versionen
         </button>
         <button className="btn ghost" onClick={handleCopy} disabled={!template.id || copying || saving || deleting} title="Diese Vorlage duplizieren">
           <Icon name="copy" size={14}/> {copying ? "Kopiert …" : "Kopieren"}
@@ -898,6 +974,17 @@ export const App = () => {
           onVariablesChange={(v) => { if (!editable) return; setVariables(v); setDirty(true); scheduleBausteinPreview(); }}
         />
       </div>
+
+      <VersionHistoryModal
+        open={versionsOpen}
+        template={template}
+        recipient={recipient}
+        druckSchwarzWeiss={druckSchwarzWeiss}
+        refreshKey={versionRefreshKey}
+        hasUnsavedChanges={dirty}
+        onClose={() => setVersionsOpen(false)}
+        onRestore={handleRestoreVersion}
+      />
 
       {recipientPickerOpen && (
         <div className="modal-backdrop" onClick={() => setRecipientPickerOpen(false)}>

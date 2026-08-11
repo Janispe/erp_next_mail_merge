@@ -31,6 +31,12 @@ const RPC_ACTIONS = {
 	upload_image: HV_SB + "upload_editor_image",
 	copy: HV_SB + "copy_serienbrief_vorlage",
 	delete: HV_SB + "delete_serienbrief_vorlage",
+	versions: HV_SB + "get_editor_versions",
+	version_update: HV_SB + "update_editor_version",
+	version_delete: HV_SB + "delete_editor_version",
+	version_restore: HV_SB + "restore_editor_version",
+	version_preview: HV_SB + "render_editor_version_preview",
+	version_compare: HV_SB + "compare_editor_version",
 };
 
 // Navigations-Aktionen: kein frappe.call, sondern öffnen ein Desk-Formular. Werden

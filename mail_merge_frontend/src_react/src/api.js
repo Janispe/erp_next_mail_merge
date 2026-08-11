@@ -13,6 +13,31 @@ import {
 
 export const embedded = isEmbedded();
 
+const VERSION_API = "mail_merge.mail_merge.doctype.serienbrief_vorlage.serienbrief_vorlage.";
+
+// Bereits geoeffnete Desk-Seiten koennen noch einen alten iframe-RPC-Host im
+// Speicher haben, obwohl das neue Editor-Bundle schon geladen wurde. Dann kennt
+// die Host-Allowlist z. B. ``versions`` noch nicht. Da iframe und Desk bewusst
+// auf derselben Origin laufen, duerfen die fest verdrahteten Versionsmethoden
+// in diesem Fall direkt ueber frappe.call aufgerufen werden. Nach einem normalen
+// Seiten-Reload bleibt der strengere RPC-Pfad der Regelfall.
+async function versionRpc(action, method, params) {
+	try {
+		return await rpc(action, params);
+	} catch (originalError) {
+		try {
+			const desk = window.parent && window.parent.frappe;
+			if (desk?.call) {
+				const response = await desk.call({ method: VERSION_API + method, args: params || {} });
+				return response?.message;
+			}
+		} catch (fallbackError) {
+			throw fallbackError;
+		}
+		throw originalError;
+	}
+}
+
 // Vorlagen-Baum: { groups: [{key,label,count,templates:[{id,title,modified}]}], total }
 export async function loadTree() {
 	if (!embedded) {
@@ -25,11 +50,7 @@ export async function loadTree() {
 
 // Einzelne Vorlage. Eingebettet → echtes HTML aus der DB (als template.htmlContent).
 // Standalone → die statische Demo-Vorlage (Block-Modell).
-export async function loadTemplate(id) {
-	if (!embedded) {
-		return { ...CURRENT_TEMPLATE, mock: true };
-	}
-	const t = await rpc("template", { name: id });
+function toEditorTemplate(t) {
 	return {
 		id: t.id,
 		title: t.title,
@@ -40,20 +61,24 @@ export async function loadTemplate(id) {
 		modified: t.modified,
 		modified_by: t.modified_by,
 		canWrite: !!t.can_write,
-		// Echte Vorlagen liefern HTML statt des Block-Modells. Der Editor rendert
-		// htmlContent (mit Chip-Dekoration), editierbar wenn canWrite.
 		htmlContent: t.html || "",
-		// Pro-Baustein Input-Pfad-Overrides: { "<Baustein>": { "<Variable>": "<Pfad>" } }
 		bausteinPaths: t.baustein_pfade || {},
-		// Pro-Baustein Werte (Text / Bool): { "<Baustein>": { "<Variable>": <Wert> } }
 		bausteinValues: t.baustein_werte || {},
-		// Pro-Baustein Output-Key: { "<Baustein>": "<baustein_key>" }
 		bausteinKeys: t.baustein_keys || {},
-		// Vorlagen-Variablen (Definition + Wert/Pfad), im Editor bearbeitbar.
 		variables: t.variables || [],
+		restoredFromVersion: t.restored_from_version || "",
+		restoredFromNumber: t.restored_from_number || 0,
 		blocks: [],
 		mock: false,
 	};
+}
+
+export async function loadTemplate(id) {
+	if (!embedded) {
+		return { ...CURRENT_TEMPLATE, mock: true };
+	}
+	const t = await rpc("template", { name: id });
+	return toEditorTemplate(t);
 }
 
 // Vorlage duplizieren. Gibt { name, title } der neuen Kopie zurück.
@@ -70,6 +95,67 @@ export async function deleteTemplate(id) {
 		return { name: id, mock: true };
 	}
 	return await rpc("delete", { template: id });
+}
+
+// Vollstaendige, unveraenderliche Vorlagen-Snapshots.
+export async function loadTemplateVersions(id) {
+	if (!embedded) {
+		return {
+			items: [
+				{ name: "demo-v3", number: 3, label: "Freigegebener Stand", source: "Gespeichert", change_summary: "Inhalt, Variablen", protected: true, is_current: true, created: new Date().toISOString(), created_by: "Administrator" },
+				{ name: "demo-v2", number: 2, label: "", source: "Gespeichert", change_summary: "Inhalt", protected: false, is_current: false, created: new Date(Date.now() - 86400000).toISOString(), created_by: "Administrator" },
+				{ name: "demo-v1", number: 1, label: "Ausgangsstand", source: "Ausgangsstand", change_summary: "Ausgangsstand", protected: false, is_current: false, created: new Date(Date.now() - 172800000).toISOString(), created_by: "Administrator" },
+			],
+		};
+	}
+	return await versionRpc("versions", "get_editor_versions", { template: id });
+}
+
+export async function updateTemplateVersion(template, version, { label, protected: isProtected }) {
+	if (!embedded) return { name: version, label: label || "", protected: !!isProtected, mock: true };
+	return await versionRpc("version_update", "update_editor_version", {
+		template,
+		version,
+		label,
+		is_protected: isProtected ? 1 : 0,
+	});
+}
+
+export async function deleteTemplateVersion(template, version) {
+	if (!embedded) return { name: version, remaining: 2, mock: true };
+	return await versionRpc("version_delete", "delete_editor_version", { template, version });
+}
+
+export async function loadTemplateVersionDraft(template, version) {
+	if (!embedded) return { ...CURRENT_TEMPLATE, restoredFromVersion: version, restoredFromNumber: 1, mock: true };
+	const result = await versionRpc("version_restore", "restore_editor_version", { template, version });
+	return toEditorTemplate(result);
+}
+
+export async function renderTemplateVersionPreview({ template, version, iterationDoctype, recipientId, druckSchwarzWeiss }) {
+	if (!embedded) return { pdf_base64: "", mode: "mock" };
+	return await versionRpc("version_preview", "render_editor_version_preview", {
+		template,
+		version,
+		iteration_doctype: iterationDoctype || "",
+		iteration_objekt: recipientId || "",
+		druck_schwarz_weiss: druckSchwarzWeiss ? 1 : 0,
+	});
+}
+
+export async function compareTemplateVersion(template, version) {
+	if (!embedded) {
+		return {
+			sections: ["Inhalt"],
+			diff: [
+				{ type: "same", text: "Der bisherige " },
+				{ type: "removed", text: "Text" },
+				{ type: "added", text: "aktualisierte Text" },
+			],
+			stats: { variables_before: 2, variables_after: 3, blocks_before: 1, blocks_after: 1 },
+		};
+	}
+	return await versionRpc("version_compare", "compare_editor_version", { template, version });
 }
 
 // Neues "Serienbrief Durchlauf"-Formular im Desk öffnen (Vorlage vorausgewählt).
@@ -112,6 +198,8 @@ export async function saveTemplate(
 	bausteinKeys,
 	variables,
 	title,
+	restoredFromVersion,
+	forceNewVersion = false,
 ) {
 	if (!embedded) {
 		return { id, title, modified: "gerade eben (Demo)", mock: true };
@@ -125,6 +213,8 @@ export async function saveTemplate(
 		variables: JSON.stringify(variables || []),
 	};
 	if (title != null) params.title = title;
+	if (restoredFromVersion) params.restored_from_version = restoredFromVersion;
+	if (forceNewVersion) params.force_new_version = 1;
 	return await rpc("save", params);
 }
 

@@ -1536,11 +1536,15 @@ class SerienbriefDurchlauf(Document):
 		if not chunks:
 			return b""
 		merger = PdfMerger()
+		appended = 0
 		try:
 			for chunk in chunks:
 				if not chunk:
 					continue
 				merger.append(BytesIO(chunk))
+				appended += 1
+			if not appended:
+				return b""
 			out = BytesIO()
 			merger.write(out)
 			return out.getvalue()
@@ -1852,7 +1856,6 @@ class SerienbriefDurchlauf(Document):
 
 		for variable in variable_defs:
 			variable_type = cstr(getattr(variable, "variable_type", None) or "").strip() or "Text"
-			is_text_like = variable_type in {"String", "Zahl", "Bool", "Datum", "Text"}
 
 			raw_key = cstr(getattr(variable, "variable", None) or getattr(variable, "label", None) or "")
 			key = frappe.scrub(raw_key) if raw_key else ""
@@ -2316,16 +2319,6 @@ class SerienbriefDurchlauf(Document):
 				return value
 
 		return cstr(getattr(doc, "title", "")).strip()
-
-
-		contacts.sort(key=lambda doc: 0 if cstr(getattr(doc, "salutation", "")).strip() == "Frau" else 1)
-
-		names: list[str] = []
-		for contact_doc in contacts:
-			person = self._guess_person_name(contact_doc)
-			if person and person not in names:
-				names.append(person)
-		return " und ".join(names)
 
 	def _format_plz_ort(self, plz: str, ort: str) -> str:
 		parts = [plz, ort]

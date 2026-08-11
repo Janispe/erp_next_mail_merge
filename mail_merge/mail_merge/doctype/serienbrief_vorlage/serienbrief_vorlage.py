@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import difflib
 from fnmatch import fnmatchcase
+import hashlib
 import json
 import re
 from typing import Any, Dict, List
@@ -10,7 +12,7 @@ import frappe
 from frappe import _
 from frappe.exceptions import DuplicateEntryError
 from frappe.model.document import Document
-from frappe.utils import cint, cstr, pretty_date, strip_html_tags
+from frappe.utils import cint, cstr, get_datetime, now_datetime, pretty_date, strip_html_tags
 from frappe.utils.jinja import get_jenv
 from jinja2 import Undefined
 from jinja2.exceptions import TemplateError, TemplateRuntimeError
@@ -59,6 +61,260 @@ class SerienbriefVorlage(Document):
 			base = frappe.scrub(block_name) or "baustein"
 			seen[base] = seen.get(base, 0) + 1
 			row.baustein_key = base if seen[base] == 1 else f"{base}_{seen[base]}"
+
+	def after_insert(self):
+		_create_template_version(
+			self,
+			source=cstr(self.flags.get("version_source") or "Ausgangsstand"),
+			label=cstr(self.flags.get("version_label") or ""),
+			restored_from=cstr(self.flags.get("version_restored_from") or ""),
+		)
+
+	def on_update(self):
+		_create_template_version(
+			self,
+			source=cstr(self.flags.get("version_source") or "Gespeichert"),
+			label=cstr(self.flags.get("version_label") or ""),
+			restored_from=cstr(self.flags.get("version_restored_from") or ""),
+			force=bool(self.flags.get("force_template_version")),
+		)
+
+	def after_rename(self, old: str, new: str, merge: bool = False):
+		# ``vorlage`` ist absichtlich ein Data-Feld: Historie verhindert dadurch
+		# nicht das Loeschen einer Vorlage. Bei Umbenennung ziehen wir sie explizit mit.
+		if not merge and _version_doctype_available():
+			frappe.db.sql(
+				"update `tabSerienbrief Vorlagenversion` set vorlage=%s where vorlage=%s",
+				(new, old),
+			)
+
+
+_VERSION_DOCTYPE = "Serienbrief Vorlagenversion"
+_VERSION_SESSION_SECONDS = 15 * 60
+_VERSION_SCALAR_FIELDS = (
+	"title",
+	"haupt_verteil_objekt",
+	"kategorie",
+	"favorite",
+	"content_type",
+	"content",
+	"html_content",
+	"jinja_content",
+	"content_position",
+	"pfad_zuordnung",
+	"variablen_werte",
+	"inline_baustein_pfade",
+	"inline_baustein_werte",
+	"description",
+)
+_VERSION_CHILD_FIELDS = ("variables", "textbausteine")
+_VERSION_CHILD_META_FIELDS = {
+	"doctype", "name", "owner", "creation", "modified", "modified_by",
+	"parent", "parentfield", "parenttype", "docstatus",
+}
+
+
+def _version_doctype_available() -> bool:
+	"""Beim ersten ``bench migrate`` kann der Python-Code vor dem DocType geladen sein."""
+	try:
+		return bool(frappe.db.table_exists(_VERSION_DOCTYPE))
+	except Exception:
+		return False
+
+
+def _snapshot_child_row(row) -> Dict[str, Any]:
+	data = row.as_dict() if hasattr(row, "as_dict") else dict(row or {})
+	return {
+		key: value
+		for key, value in data.items()
+		if key not in _VERSION_CHILD_META_FIELDS and not key.startswith("_")
+	}
+
+
+def _build_template_snapshot(doc) -> Dict[str, Any]:
+	"""Serialisiert den vollstaendigen, wiederherstellbaren Editorzustand."""
+	snapshot: Dict[str, Any] = {
+		"schema_version": 1,
+		"doctype": "Serienbrief Vorlage",
+	}
+	for fieldname in _VERSION_SCALAR_FIELDS:
+		snapshot[fieldname] = doc.get(fieldname)
+	for fieldname in _VERSION_CHILD_FIELDS:
+		snapshot[fieldname] = [_snapshot_child_row(row) for row in (doc.get(fieldname) or [])]
+	return snapshot
+
+
+def _snapshot_json(snapshot: Dict[str, Any]) -> str:
+	return json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _snapshot_hash(snapshot: Dict[str, Any]) -> str:
+	return hashlib.sha256(_snapshot_json(snapshot).encode("utf-8")).hexdigest()
+
+
+def _parse_version_snapshot(raw: str | Dict[str, Any] | None) -> Dict[str, Any]:
+	data = frappe.parse_json(raw) if isinstance(raw, str) else raw
+	if not isinstance(data, dict) or data.get("doctype") != "Serienbrief Vorlage":
+		frappe.throw(_("Die gespeicherte Vorlagenversion ist ungueltig."))
+	return data
+
+
+def _snapshot_content(snapshot: Dict[str, Any]) -> str:
+	if cstr(snapshot.get("content_type")).strip() == "HTML + Jinja":
+		return "\n".join(
+			part for part in (
+				cstr(snapshot.get("jinja_content") or ""),
+				cstr(snapshot.get("html_content") or ""),
+			) if part.strip()
+		)
+	return cstr(snapshot.get("content") or "")
+
+
+def _snapshot_json_value(snapshot: Dict[str, Any], fieldname: str) -> Any:
+	raw = snapshot.get(fieldname)
+	if raw in (None, ""):
+		return {}
+	try:
+		parsed = frappe.parse_json(raw) if isinstance(raw, str) else raw
+	except Exception:
+		return raw
+	return parsed if parsed not in (None, "") else {}
+
+
+def _snapshot_change_sections(before: Dict[str, Any] | None, after: Dict[str, Any]) -> List[str]:
+	if not before:
+		return [_("Ausgangsstand")]
+	sections: List[str] = []
+	if _snapshot_content(before) != _snapshot_content(after):
+		sections.append(_("Inhalt"))
+	if before.get("variables") != after.get("variables") or any(
+		_snapshot_json_value(before, field) != _snapshot_json_value(after, field)
+		for field in ("pfad_zuordnung", "variablen_werte")
+	):
+		sections.append(_("Variablen"))
+	if before.get("textbausteine") != after.get("textbausteine") or any(
+		_snapshot_json_value(before, field) != _snapshot_json_value(after, field)
+		for field in ("inline_baustein_pfade", "inline_baustein_werte")
+	):
+		sections.append(_("Bausteine"))
+	if before.get("title") != after.get("title"):
+		sections.append(_("Titel"))
+	settings = (
+		"haupt_verteil_objekt", "kategorie", "favorite", "content_type",
+		"content_position", "description",
+	)
+	if any(before.get(field) != after.get(field) for field in settings):
+		sections.append(_("Einstellungen"))
+	return sections or [_("Keine inhaltliche Aenderung")]
+
+
+def _latest_template_version(template_name: str):
+	rows = frappe.get_all(
+		_VERSION_DOCTYPE,
+		filters={"vorlage": template_name},
+		fields=[
+			"name", "version_number", "version_label", "source", "is_protected",
+			"restored_from", "content_hash", "snapshot", "creation", "modified", "owner",
+		],
+		order_by="version_number desc",
+		limit=1,
+	)
+	return rows[0] if rows else None
+
+
+def _can_coalesce_template_version(
+	latest,
+	*,
+	source: str,
+	label: str,
+	restored_from: str,
+	force: bool,
+	now=None,
+	user: str | None = None,
+) -> bool:
+	"""Unbenannte Kurzzeit-Speicherungen derselben Sitzung bilden einen Arbeitsstand."""
+	if not latest or force or cstr(source).strip() != "Gespeichert":
+		return False
+	if cstr(label).strip() or cstr(restored_from).strip():
+		return False
+	if cstr(latest.source).strip() != "Gespeichert":
+		return False
+	if cstr(latest.version_label).strip() or cint(latest.is_protected) or cstr(latest.restored_from).strip():
+		return False
+	if cstr(latest.owner).strip() != cstr(user or frappe.session.user).strip():
+		return False
+	created = get_datetime(latest.creation)
+	current = get_datetime(now or now_datetime())
+	seconds = (current - created).total_seconds()
+	return 0 <= seconds <= _VERSION_SESSION_SECONDS
+
+
+def _refresh_session_template_version(doc, latest, snapshot: Dict[str, Any], content_hash: str):
+	previous_rows = frappe.get_all(
+		_VERSION_DOCTYPE,
+		filters={"vorlage": doc.name, "version_number": ["<", latest.version_number]},
+		fields=["snapshot"],
+		order_by="version_number desc",
+		limit=1,
+	)
+	previous = _parse_version_snapshot(previous_rows[0].snapshot) if previous_rows else None
+	version = frappe.get_doc(_VERSION_DOCTYPE, latest.name)
+	version.flags.allow_session_refresh = True
+	version.change_summary = ", ".join(_snapshot_change_sections(previous, snapshot))
+	version.content_hash = content_hash
+	version.snapshot = _snapshot_json(snapshot)
+	version.save(ignore_permissions=True)
+	doc.flags.last_template_version = version.name
+	return version.name
+
+
+def _create_template_version(
+	doc,
+	*,
+	source: str = "Gespeichert",
+	label: str = "",
+	restored_from: str = "",
+	force: bool = False,
+):
+	"""Legt Meilensteine an und fasst schnelle, unbenannte Speicherungen zusammen."""
+	if not doc or not doc.name or not _version_doctype_available():
+		return None
+	snapshot = _build_template_snapshot(doc)
+	content_hash = _snapshot_hash(snapshot)
+
+	# Die Vorlagenzeile sperren: parallele Speicherungen erhalten dadurch stabile,
+	# fortlaufende Versionsnummern.
+	frappe.db.sql("select name from `tabSerienbrief Vorlage` where name=%s for update", doc.name)
+	latest = _latest_template_version(doc.name)
+	if latest and latest.content_hash == content_hash and not force:
+		return latest.name
+	if _can_coalesce_template_version(
+		latest,
+		source=source,
+		label=label,
+		restored_from=restored_from,
+		force=force,
+	):
+		return _refresh_session_template_version(doc, latest, snapshot, content_hash)
+
+	previous = _parse_version_snapshot(latest.snapshot) if latest else None
+	sections = _snapshot_change_sections(previous, snapshot)
+	version = frappe.get_doc(
+		{
+			"doctype": _VERSION_DOCTYPE,
+			"vorlage": doc.name,
+			"version_number": cint(latest.version_number) + 1 if latest else 1,
+			"version_label": cstr(label).strip(),
+			"source": cstr(source).strip() or "Gespeichert",
+			"change_summary": ", ".join(sections),
+			"restored_from": cstr(restored_from).strip() or None,
+			"content_hash": content_hash,
+			"snapshot": _snapshot_json(snapshot),
+		}
+	)
+	version.insert(ignore_permissions=True)
+	doc.flags.last_template_version = version.name
+	return version.name
 
 
 def _get_block_template_source(block_doc) -> str:
@@ -2429,18 +2685,8 @@ def get_editor_tree() -> Dict[str, Any]:
 	return {"groups": groups, "total": len(templates)}
 
 
-@frappe.whitelist()
-def get_editor_template(name: str | None = None) -> Dict[str, Any]:
-	"""Einzelne Vorlage für die Anzeige im React-Editor (read-only)."""
-	template_name = (name or "").strip()
-	if not template_name:
-		frappe.throw(_("Bitte eine Vorlage angeben."))
-
-	if not frappe.has_permission("Serienbrief Vorlage", "read", doc=template_name):
-		frappe.throw(_("Keine Berechtigung, die Vorlage zu lesen."), frappe.PermissionError)
-
-	doc = frappe.get_doc("Serienbrief Vorlage", template_name)
-
+def _editor_template_payload(doc) -> Dict[str, Any]:
+	"""Serialisiert auch einen nur im Speicher veränderten Vorlagenstand für den Editor."""
 	if doc.content_type == "HTML + Jinja":
 		html = doc.html_content or ""
 	else:
@@ -2500,6 +2746,19 @@ def get_editor_template(name: str | None = None) -> Dict[str, Any]:
 		# Pro-Baustein Output-Key aus Serienbrief Vorlagenbaustein.baustein_key.
 		"baustein_keys": _get_editor_baustein_keys(doc),
 	}
+
+
+@frappe.whitelist()
+def get_editor_template(name: str | None = None) -> Dict[str, Any]:
+	"""Einzelne Vorlage für die Anzeige im React-Editor (read-only)."""
+	template_name = (name or "").strip()
+	if not template_name:
+		frappe.throw(_("Bitte eine Vorlage angeben."))
+
+	if not frappe.has_permission("Serienbrief Vorlage", "read", doc=template_name):
+		frappe.throw(_("Keine Berechtigung, die Vorlage zu lesen."), frappe.PermissionError)
+
+	return _editor_template_payload(frappe.get_doc("Serienbrief Vorlage", template_name))
 
 
 _VARIABLE_TEXT_TYPES = {"Text", "String", "Zahl", "Bool", "Datum"}
@@ -2631,6 +2890,8 @@ def save_editor_template(
 	baustein_keys: str | None = None,
 	variables: str | None = None,
 	title: str | None = None,
+	restored_from_version: str | None = None,
+	force_new_version: int | str = 0,
 ) -> Dict[str, Any]:
 	"""Editor-Inhalt zurück in die Vorlage schreiben (content bzw. html_content je
 	nach content_type). validate() sanitisiert Rich-Text automatisch.
@@ -2649,6 +2910,11 @@ def save_editor_template(
 		frappe.throw(_("Keine Berechtigung, die Vorlage zu bearbeiten."), frappe.PermissionError)
 
 	doc = frappe.get_doc("Serienbrief Vorlage", template_name)
+	restored_version = None
+	if cstr(restored_from_version or "").strip():
+		restored_version = _require_template_version(
+			cstr(restored_from_version or "").strip(), template_name
+		)
 	new_html = cstr(html or "")
 	if doc.content_type == "HTML + Jinja":
 		doc.html_content = new_html
@@ -2670,6 +2936,18 @@ def save_editor_template(
 	new_title = cstr(title).strip() if title is not None else ""
 	if new_title and new_title != cstr(doc.title).strip():
 		doc.title = new_title
+	if restored_version:
+		# Erst der explizite Speichervorgang erzeugt die neue Version samt Herkunftskante.
+		doc.flags.version_source = "Wiederherstellung"
+		doc.flags.version_restored_from = restored_version.name
+		doc.flags.version_label = _("Wiederhergestellt aus Version {0}").format(
+			restored_version.version_number
+		)
+		doc.flags.force_template_version = True
+	elif cint(force_new_version):
+		# Bewusster Meilenstein: nie mit dem laufenden 15-Minuten-Arbeitsstand verschmelzen.
+		doc.flags.version_source = "Gespeichert"
+		doc.flags.force_template_version = True
 	doc.save()
 
 	# autoname = format:{title}: der Name IST der Titel. Bei Titeländerung umbenennen,
@@ -2689,6 +2967,262 @@ def save_editor_template(
 		doc = frappe.get_doc("Serienbrief Vorlage", new_title)
 
 	return {"id": doc.name, "title": doc.title, "modified": pretty_date(doc.modified)}
+
+
+def _require_template_version(version_name: str, template_name: str):
+	if not _version_doctype_available():
+		frappe.throw(_("Die Versionshistorie ist noch nicht installiert. Bitte zuerst migrieren."))
+	if not frappe.db.exists(_VERSION_DOCTYPE, version_name):
+		frappe.throw(_("Die gewaehlte Vorlagenversion existiert nicht mehr."))
+	version = frappe.get_doc(_VERSION_DOCTYPE, version_name)
+	if cstr(version.vorlage).strip() != template_name:
+		frappe.throw(_("Die gewaehlte Version gehoert nicht zu dieser Vorlage."), frappe.PermissionError)
+	return version
+
+
+def _version_metadata(
+	version, *, current_hash: str = "", current_version: str = ""
+) -> Dict[str, Any]:
+	return {
+		"name": version.name,
+		"number": cint(version.version_number),
+		"label": cstr(version.version_label or ""),
+		"source": cstr(version.source or "Gespeichert"),
+		"change_summary": cstr(version.change_summary or ""),
+		"protected": bool(cint(version.is_protected)),
+		"restored_from": cstr(version.restored_from or ""),
+		"content_hash": cstr(version.content_hash or ""),
+		"is_current": bool(
+			current_hash
+			and current_version
+			and version.name == current_version
+			and version.content_hash == current_hash
+		),
+		"created": version.creation.isoformat() if hasattr(version.creation, "isoformat") else cstr(version.creation),
+		"created_by": cstr(version.owner or ""),
+	}
+
+
+def _version_delete_block_reason(
+	version,
+	*,
+	latest_name: str,
+	first_name: str,
+	referenced_names: set[str],
+) -> str:
+	if version.name == latest_name:
+		return _("Der aktuelle Stand kann nicht gelöscht werden.")
+	if version.name == first_name or cstr(version.source).strip() == "Ausgangsstand":
+		return _("Der Ausgangsstand kann nicht gelöscht werden.")
+	if cint(version.is_protected):
+		return _("Geschützte Versionen müssen vor dem Löschen entsperrt werden.")
+	if version.name in referenced_names:
+		return _("Diese Version ist Ursprung einer Wiederherstellung und bleibt für den Verlauf erforderlich.")
+	return ""
+
+
+def _version_rows_with_delete_metadata(rows, *, current_hash: str, current_version: str):
+	latest_name = rows[0].name if rows else ""
+	first_name = rows[-1].name if rows else ""
+	referenced_names = {cstr(row.restored_from).strip() for row in rows if cstr(row.restored_from).strip()}
+	items = []
+	for row in rows:
+		item = _version_metadata(row, current_hash=current_hash, current_version=current_version)
+		reason = _version_delete_block_reason(
+			row,
+			latest_name=latest_name,
+			first_name=first_name,
+			referenced_names=referenced_names,
+		)
+		item["can_delete"] = not bool(reason)
+		item["delete_block_reason"] = reason
+		items.append(item)
+	return items
+
+
+@frappe.whitelist()
+def get_editor_versions(template: str | None = None) -> Dict[str, Any]:
+	"""Nummerierte Snapshot-Historie einer Vorlage, neueste Version zuerst."""
+	template_name = cstr(template or "").strip()
+	if not template_name or not frappe.has_permission("Serienbrief Vorlage", "read", doc=template_name):
+		frappe.throw(_("Keine Berechtigung, die Versionshistorie zu lesen."), frappe.PermissionError)
+	if not _version_doctype_available():
+		return {"items": [], "current_hash": ""}
+
+	current_doc = frappe.get_doc("Serienbrief Vorlage", template_name)
+	current_hash = _snapshot_hash(_build_template_snapshot(current_doc))
+	rows = frappe.get_all(
+		_VERSION_DOCTYPE,
+		filters={"vorlage": template_name},
+		fields=[
+			"name", "version_number", "version_label", "source", "change_summary",
+			"is_protected", "restored_from", "content_hash", "creation", "owner",
+		],
+		order_by="version_number desc",
+		limit_page_length=0,
+	)
+	current_version = rows[0].name if rows and rows[0].content_hash == current_hash else ""
+	return {
+		"items": _version_rows_with_delete_metadata(
+			rows, current_hash=current_hash, current_version=current_version
+		),
+		"current_hash": current_hash,
+	}
+
+
+@frappe.whitelist()
+def update_editor_version(
+	template: str | None = None,
+	version: str | None = None,
+	label: str | None = None,
+	is_protected: int | str | bool | None = None,
+) -> Dict[str, Any]:
+	"""Bearbeitet nur die kuratierten Metadaten; der Snapshot bleibt unveraenderlich."""
+	template_name = cstr(template or "").strip()
+	if not template_name or not frappe.has_permission("Serienbrief Vorlage", "write", doc=template_name):
+		frappe.throw(_("Keine Berechtigung, die Versionshistorie zu bearbeiten."), frappe.PermissionError)
+	doc = _require_template_version(cstr(version or "").strip(), template_name)
+	if label is not None:
+		doc.version_label = cstr(label).strip()[:140]
+	if is_protected is not None:
+		doc.is_protected = 1 if cint(is_protected) else 0
+	doc.save(ignore_permissions=True)
+	items = get_editor_versions(template_name).get("items") or []
+	return next((item for item in items if item.get("name") == doc.name), _version_metadata(doc))
+
+
+@frappe.whitelist()
+def delete_editor_version(
+	template: str | None = None, version: str | None = None
+) -> Dict[str, Any]:
+	"""Löscht nur entbehrliche historische Versionen; Nummern werden nie neu vergeben."""
+	template_name = cstr(template or "").strip()
+	if not template_name or not frappe.has_permission("Serienbrief Vorlage", "write", doc=template_name):
+		frappe.throw(_("Keine Berechtigung, Versionen dieser Vorlage zu löschen."), frappe.PermissionError)
+	version_doc = _require_template_version(cstr(version or "").strip(), template_name)
+	rows = frappe.get_all(
+		_VERSION_DOCTYPE,
+		filters={"vorlage": template_name},
+		fields=["name", "source", "is_protected", "restored_from"],
+		order_by="version_number desc",
+		limit_page_length=0,
+	)
+	reason = _version_delete_block_reason(
+		version_doc,
+		latest_name=rows[0].name if rows else "",
+		first_name=rows[-1].name if rows else "",
+		referenced_names={cstr(row.restored_from).strip() for row in rows if cstr(row.restored_from).strip()},
+	)
+	if reason:
+		frappe.throw(reason)
+	frappe.delete_doc(_VERSION_DOCTYPE, version_doc.name, ignore_permissions=True)
+	return {
+		"name": version_doc.name,
+		"remaining": frappe.db.count(_VERSION_DOCTYPE, {"vorlage": template_name}),
+	}
+
+
+def _apply_template_snapshot(doc, snapshot: Dict[str, Any]) -> None:
+	for fieldname in _VERSION_SCALAR_FIELDS:
+		if fieldname in snapshot:
+			doc.set(fieldname, snapshot.get(fieldname))
+	for fieldname in _VERSION_CHILD_FIELDS:
+		rows = snapshot.get(fieldname)
+		if isinstance(rows, list):
+			doc.set(fieldname, [dict(row) for row in rows if isinstance(row, dict)])
+
+
+@frappe.whitelist()
+def restore_editor_version(
+	template: str | None = None, version: str | None = None
+) -> Dict[str, Any]:
+	"""Lädt einen Snapshot nur als ungespeicherten Editor-Entwurf, ohne DB-Mutation."""
+	template_name = cstr(template or "").strip()
+	if not template_name or not frappe.has_permission("Serienbrief Vorlage", "write", doc=template_name):
+		frappe.throw(_("Keine Berechtigung, diese Vorlage wiederherzustellen."), frappe.PermissionError)
+	version_doc = _require_template_version(cstr(version or "").strip(), template_name)
+	snapshot = _parse_version_snapshot(version_doc.snapshot)
+	doc = frappe.get_doc("Serienbrief Vorlage", template_name)
+	_apply_template_snapshot(doc, snapshot)
+	payload = _editor_template_payload(doc)
+	payload["restored_from_version"] = version_doc.name
+	payload["restored_from_number"] = cint(version_doc.version_number)
+	return payload
+
+
+@frappe.whitelist()
+def render_editor_version_preview(
+	template: str | None = None,
+	version: str | None = None,
+	iteration_doctype: str | None = None,
+	iteration_objekt: str | None = None,
+	druck_schwarz_weiss: int | str = 0,
+) -> Dict[str, str]:
+	"""PDF-nahe Vorschau eines historischen Snapshots ohne DB-Mutation."""
+	template_name = cstr(template or "").strip()
+	if not template_name or not frappe.has_permission("Serienbrief Vorlage", "read", doc=template_name):
+		frappe.throw(_("Keine Berechtigung, diese Vorlagenversion anzusehen."), frappe.PermissionError)
+	version_doc = _require_template_version(cstr(version or "").strip(), template_name)
+	snapshot = _parse_version_snapshot(version_doc.snapshot)
+	doc = frappe.get_doc("Serienbrief Vorlage", template_name)
+	_apply_template_snapshot(doc, snapshot)
+	return render_template_preview_pdf(
+		template_doc=doc.as_dict(),
+		iteration_doctype=cstr(iteration_doctype or "").strip() or None,
+		iteration_objekt=cstr(iteration_objekt or "").strip() or None,
+		split_preview=not bool(cstr(iteration_objekt or "").strip()),
+		druck_schwarz_weiss=druck_schwarz_weiss,
+	)
+
+
+def _plain_snapshot_text(snapshot: Dict[str, Any]) -> str:
+	html = _snapshot_content(snapshot)
+	html = re.sub(r"<\s*br\s*/?\s*>", "\n", html, flags=re.I)
+	html = re.sub(r"</\s*(p|div|li|tr|h[1-6])\s*>", "\n", html, flags=re.I)
+	return re.sub(r"[ \t]+", " ", strip_html_tags(html)).strip()
+
+
+def _word_diff(before: str, after: str, limit: int = 800) -> List[Dict[str, str]]:
+	token_re = re.compile(r"\s+|[\wÀ-ɏ€§]+|[^\w\s]", flags=re.UNICODE)
+	left = token_re.findall(before)
+	right = token_re.findall(after)
+	matcher = difflib.SequenceMatcher(a=left, b=right, autojunk=False)
+	segments: List[Dict[str, str]] = []
+	for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+		if tag in ("equal", "delete", "replace") and i1 != i2:
+			segments.append({"type": "same" if tag == "equal" else "removed", "text": "".join(left[i1:i2])})
+		if tag in ("insert", "replace") and j1 != j2:
+			segments.append({"type": "added", "text": "".join(right[j1:j2])})
+		if len(segments) >= limit:
+			segments.append({"type": "same", "text": "\n… Vergleich gekuerzt …"})
+			break
+	return segments
+
+
+@frappe.whitelist()
+def compare_editor_version(
+	template: str | None = None, version: str | None = None
+) -> Dict[str, Any]:
+	"""Semantischer Vergleich einer historischen Version mit dem aktuellen Stand."""
+	template_name = cstr(template or "").strip()
+	if not template_name or not frappe.has_permission("Serienbrief Vorlage", "read", doc=template_name):
+		frappe.throw(_("Keine Berechtigung, Vorlagenversionen zu vergleichen."), frappe.PermissionError)
+	version_doc = _require_template_version(cstr(version or "").strip(), template_name)
+	before = _parse_version_snapshot(version_doc.snapshot)
+	after = _build_template_snapshot(frappe.get_doc("Serienbrief Vorlage", template_name))
+	sections = _snapshot_change_sections(before, after)
+	return {
+		"from": _version_metadata(version_doc, current_hash=_snapshot_hash(after)),
+		"to": {"label": _("Aktueller Stand"), "content_hash": _snapshot_hash(after)},
+		"sections": sections,
+		"diff": _word_diff(_plain_snapshot_text(before), _plain_snapshot_text(after)),
+		"stats": {
+			"variables_before": len(before.get("variables") or []),
+			"variables_after": len(after.get("variables") or []),
+			"blocks_before": len(before.get("textbausteine") or []),
+			"blocks_after": len(after.get("textbausteine") or []),
+		},
+	}
 
 
 # Erlaubte Raster-Bildformate, erkannt an Magic-Bytes (SVG bewusst NICHT — XSS-Risiko, da
