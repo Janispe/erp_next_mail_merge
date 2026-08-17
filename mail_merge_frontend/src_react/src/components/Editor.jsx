@@ -94,6 +94,13 @@ function clearPageSimulation(dom) {
 	});
 }
 
+function clearPageSimulationLayout(canvas) {
+	if (!canvas) return;
+	canvas.querySelectorAll(":scope > .hv-page-sim-sheet").forEach((el) => el.remove());
+	canvas.style.removeProperty("--hv-editor-layout-min-height");
+	delete canvas.__hvPageSimulationPages;
+}
+
 // Fuer eine neue Pagination brauchen wir die natuerlichen Elementpositionen
 // ohne bereits gesetzte Simulationsabstaende. Die Decorations bleiben dabei
 // im ProseMirror-State erhalten; wir neutralisieren sie nur synchron fuer die
@@ -159,6 +166,84 @@ function collectPageBreakCandidates(editor) {
 	return result;
 }
 
+function elementOuterHeight(element, measuredHeight) {
+	const style = window.getComputedStyle(element);
+	const marginTop = Number.parseFloat(style.marginTop) || 0;
+	const marginBottom = Number.parseFloat(style.marginBottom) || 0;
+	return measuredHeight + marginTop + marginBottom;
+}
+
+function elementVerticalChrome(element) {
+	const style = window.getComputedStyle(element);
+	return [
+		style.marginTop,
+		style.marginBottom,
+		style.paddingTop,
+		style.paddingBottom,
+		style.borderTopWidth,
+		style.borderBottomWidth,
+	].reduce((sum, value) => sum + (Number.parseFloat(value) || 0), 0);
+}
+
+// Diese Anteile existieren nur, damit die Vorlage im Layoutmodus weiterhin
+// bedienbar bleibt. Der Text innerhalb eines Kontrollfluss-Containers bleibt
+// bewusst normaler Inhalt; kompensiert werden nur Header, Zweigmarker und
+// Rahmen. So wächst eine Seite um die echte Editor-UI, nicht um komplette
+// alternative Briefvarianten.
+function editorOnlyLayoutMetrics(element, measuredHeight) {
+	if (!element) return { extra: 0, skipBreak: false };
+	const footer = element.matches('[data-hv-baustein-name*="Footer" i]')
+		? element
+		: element.querySelector?.('[data-hv-baustein-name*="Footer" i]');
+	if (footer) {
+		return { extra: elementOuterHeight(element, measuredHeight), skipBreak: true };
+	}
+	if (element.matches(".jinja-if-container")) {
+		const controls = element.querySelectorAll(
+			".jinja-if-content > .jinja-if-block, " +
+				'.jinja-if-content > .jinja-block[data-hv-branch="else"], ' +
+				'.jinja-if-content > .jinja-block[data-hv-branch="elif"]'
+		);
+		const controlHeight = Array.from(controls).reduce((sum, control) => {
+			return sum + elementOuterHeight(control, control.getBoundingClientRect().height);
+		}, 0);
+		return {
+			extra: elementVerticalChrome(element) + controlHeight,
+			skipBreak: true,
+		};
+	}
+	if (element.matches(".jinja-if-block, .jinja-block")) {
+		if (element.closest(".jinja-if-container")) return { extra: 0, skipBreak: true };
+		return { extra: elementOuterHeight(element, measuredHeight), skipBreak: true };
+	}
+	return { extra: 0, skipBreak: false };
+}
+
+function renderPageSimulationSheets(canvas, pages, contentBottom) {
+	const existing = Array.from(canvas.querySelectorAll(":scope > .hv-page-sim-sheet"));
+	for (let index = existing.length; index < pages.length; index += 1) {
+		const sheet = document.createElement("div");
+		sheet.className = "hv-page-sim-sheet";
+		canvas.prepend(sheet);
+		existing.push(sheet);
+	}
+	for (let index = existing.length - 1; index >= pages.length; index -= 1) {
+		existing[index].remove();
+		existing.pop();
+	}
+	pages.forEach((page, index) => {
+		const sheet = existing[index];
+		sheet.style.top = `${page.top}px`;
+		sheet.style.height = `${page.height}px`;
+		sheet.style.setProperty("--hv-page-content-bottom", `${contentBottom}px`);
+		sheet.dataset.page = String(index + 1);
+	});
+	const last = pages.at(-1);
+	const minHeight = last ? last.top + last.height : 0;
+	canvas.style.setProperty("--hv-editor-layout-min-height", `${minHeight}px`);
+	canvas.__hvPageSimulationPages = pages.map((page) => ({ ...page }));
+}
+
 function applyPageSimulation(canvas, editor) {
 	const pm = editor?.view?.dom;
 	if (!canvas || !pm) return;
@@ -167,7 +252,14 @@ function applyPageSimulation(canvas, editor) {
 		collectPageBreakCandidates(editor)
 			.map((candidate) => {
 				const rect = candidate.element.getBoundingClientRect();
-				return { ...candidate, naturalTop: rect.top, height: rect.height };
+				const editorLayout = editorOnlyLayoutMetrics(candidate.element, rect.height);
+				return {
+					...candidate,
+					naturalTop: rect.top,
+					height: rect.height,
+					editorExtra: editorLayout.extra,
+					skipBreak: editorLayout.skipBreak,
+				};
 			})
 			.filter(({ height }) => height > 0)
 	);
@@ -179,7 +271,6 @@ function applyPageSimulation(canvas, editor) {
 	const pxPerMm = canvasRect.width / page.pageWidthMm;
 	const pageHeight = page.pageMm * pxPerMm;
 	const pageGap = page.pageGapMm * pxPerMm;
-	const pageStep = pageHeight + pageGap;
 	const contentTop = page.marginTopMm * pxPerMm;
 	const contentBottom = page.marginBottomMm * pxPerMm;
 	const contentHeight = pageHeight - contentTop - contentBottom;
@@ -187,6 +278,16 @@ function applyPageSimulation(canvas, editor) {
 	const decorationKeys = [];
 	let simulatedShift = 0;
 	const movedElements = [];
+	const pages = [{ top: 0, height: pageHeight, extra: 0, editorBudget: 0 }];
+	let currentPage = pages[0];
+	const growCurrentPage = (amount) => {
+		const available = Math.max(0, currentPage.editorBudget - currentPage.extra);
+		const growth = Math.min(Math.max(0, amount), available);
+		if (growth <= 1) return 0;
+		currentPage.extra += growth;
+		currentPage.height = pageHeight + currentPage.extra;
+		return growth;
+	};
 
 	const addDecoration = (docChild, gap) => {
 		if (!docChild || gap <= 1) return false;
@@ -209,27 +310,46 @@ function applyPageSimulation(canvas, editor) {
 
 		const top = candidate.naturalTop - canvasRect.top + simulatedShift;
 		const height = candidate.height;
+		if (candidate.editorExtra > 0) {
+			currentPage.editorBudget += Math.max(0, candidate.editorExtra);
+		}
+		if (candidate.skipBreak) {
+			const editorBottom = currentPage.top + currentPage.height - contentBottom;
+			growCurrentPage(top + height - editorBottom);
+			continue;
+		}
 		if (height <= 0 || height > contentHeight) continue;
 
-		const pageIndex = Math.max(0, Math.floor(Math.max(0, top) / pageStep));
-		const pageTop = pageIndex * pageStep;
+		const pageTop = currentPage.top;
 		const pageContentTop = pageTop + contentTop;
-		const pageContentBottom = pageTop + pageHeight - contentBottom;
-		const pageVisualBottom = pageTop + pageHeight;
-		const inPageGap = top >= pageVisualBottom - 1;
+		let pageContentBottom = pageTop + currentPage.height - contentBottom;
+		let pageVisualBottom = pageTop + currentPage.height;
+		let inPageGap = top >= pageVisualBottom - 1;
 
 		if (top <= pageContentTop + 1) continue;
 		if (!inPageGap && top + height <= pageContentBottom + 1) continue;
+		growCurrentPage(top + height - pageContentBottom);
+		pageContentBottom = pageTop + currentPage.height - contentBottom;
+		pageVisualBottom = pageTop + currentPage.height;
+		inPageGap = top >= pageVisualBottom - 1;
+		if (!inPageGap && top + height <= pageContentBottom + 1) continue;
 
-		const nextContentTop = pageTop + pageStep + contentTop;
+		const nextPageTop = pageTop + currentPage.height + pageGap;
+		const nextContentTop = nextPageTop + contentTop;
 		const gap = Math.max(0, nextContentTop - top);
 		if (addDecoration(candidate, gap)) {
 			simulatedShift += gap;
 			movedElements.push(el);
+			currentPage = { top: nextPageTop, height: pageHeight, extra: 0, editorBudget: 0 };
+			pages.push(currentPage);
 		}
 	}
 
-	const key = decorationKeys.join("|");
+	renderPageSimulationSheets(canvas, pages, contentBottom);
+	const key = [
+		decorationKeys.join("|"),
+		pages.map((entry) => `${entry.top}:${entry.height}`).join("|"),
+	].join("::");
 	if (editor.storage.hvPageSimulationKey === key) return;
 	editor.storage.hvPageSimulationKey = key;
 	editor.view.dispatch(
@@ -259,7 +379,8 @@ function applyFooterOverlays(canvas, editor) {
 	const bottomMarginPx = page.marginBottomMm * pxPerMm;
 	// Seitenanzahl: jede page-sim-next-Marker ist ein Seitenumbruch → pages = breaks + 1.
 	const breaks = pm ? pm.querySelectorAll(".hv-page-sim-next").length : 0;
-	const pageCount = Math.max(1, breaks + 1);
+	const simulatedPages = canvas.__hvPageSimulationPages;
+	const pageCount = Math.max(1, simulatedPages?.length || breaks + 1);
 
 	for (let i = existing.length; i < pageCount; i += 1) {
 		const el = document.createElement("div");
@@ -275,7 +396,10 @@ function applyFooterOverlays(canvas, editor) {
 		// Top am Beginn des Bottom-Margin-Bereichs der Seite. Der Footer-Inhalt
 		// hat selbst eine fixe Höhe (12mm laut Print Format), Rest des Margins
 		// bleibt sichtbar leer wie im PDF.
-		const top = idx * pageStep + pageHeightPx - bottomMarginPx;
+		const simulated = simulatedPages?.[idx];
+		const top = simulated
+			? simulated.top + simulated.height - bottomMarginPx
+			: idx * pageStep + pageHeightPx - bottomMarginPx;
 		overlay.style.top = `${top}px`;
 		if (overlay.dataset.footerHtml !== footerHtml) {
 			overlay.innerHTML = footerHtml;
@@ -291,6 +415,7 @@ function schedulePageSimulation(editor) {
 		if (!canvas) {
 			clearPageSimulationDecorations(editor);
 			clearPageSimulation(editor.view?.dom);
+			clearPageSimulationLayout(document.querySelector(".editor-canvas"));
 			// Footer-Overlays räumen, wenn Layoutmodus aus ist (kein Canvas).
 			document.querySelectorAll(".hv-page-sim-footer-overlay").forEach((el) => el.remove());
 			return;
@@ -875,6 +1000,7 @@ export const Editor = ({
 		if (!bausteinLayoutMode) {
 			clearPageSimulationDecorations(editor);
 			clearPageSimulation(editor?.view?.dom);
+			clearPageSimulationLayout(canvas);
 			return;
 		}
 		if (!canvas || !editor?.view?.dom) return;
