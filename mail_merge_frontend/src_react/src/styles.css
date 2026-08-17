@@ -2505,6 +2505,21 @@ span[style*="color"] > .chip {
 .editor-canvas.hv-baustein-layout .tiptap-surface::before {
   content: none;
 }
+/* Der Footer-Baustein bleibt Teil des Dokuments und damit serialisierbar, wird
+   im Layoutmodus aber nicht als normaler Briefinhalt dargestellt. Sein echtes
+   Render-Ergebnis liegt pro Seite im unteren Seitenrand (Overlay darunter).
+   Enthält eine Zeile außer dem Footer noch weitere Bausteine, verschwindet nur
+   der Footer-Node; reine Footer-Zeilen werden vollständig aus dem Fluss genommen. */
+.editor-canvas.hv-baustein-layout .tiptap-surface [data-hv-baustein-name*="Footer" i],
+.editor-canvas.hv-baustein-layout .tiptap-surface .hv-footer-source-row {
+  display: none !important;
+}
+/* ProseMirror gibt auch einer optisch leeren Absatzzeile eine Zeilenhöhe.
+   Reine Footer-Absätze daher ebenfalls entfernen. Sobald ein weiterer
+   Baustein/Platzhalter in derselben Zeile liegt, bleibt der Absatz erhalten. */
+.editor-canvas.hv-baustein-layout .tiptap-surface > p:has(> [data-hv-baustein-name*="Footer" i]):not(:has(> [data-hv-kind]:not([data-hv-baustein-name*="Footer" i]))) {
+  display: none !important;
+}
 /* Per-Seite-Footer-Overlay im Layoutmodus: wird von Editor.jsx
    (applyFooterOverlays) pro simulierter Seite ins Canvas eingefügt.
    Positioniert absolut relativ zum Canvas, breite Spalte = Content-Spalte
@@ -2516,10 +2531,38 @@ span[style*="color"] > .chip {
   position: absolute;
   left: var(--hv-editor-page-margin-left, 25mm);
   right: var(--hv-editor-page-margin-right, 20mm);
-  background: rgba(91, 58, 153, 0.055);
-  box-shadow: inset 0 0 0 1px rgba(91, 58, 153, 0.12);
-  z-index: 1;
+  background: transparent;
+  z-index: 3;
   pointer-events: none;
+}
+.editor-canvas.hv-baustein-layout .hv-page-sim-footer-overlay.is-interactive {
+  pointer-events: auto;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.editor-canvas.hv-baustein-layout .hv-page-sim-footer-overlay.is-interactive:hover,
+.editor-canvas.hv-baustein-layout .hv-page-sim-footer-overlay.is-interactive:focus-visible {
+  outline: 1px solid rgba(31, 115, 183, 0.42);
+  outline-offset: 2px;
+  background: rgba(31, 115, 183, 0.035);
+}
+.editor-canvas.hv-baustein-layout .hv-page-sim-footer-overlay.is-interactive::after {
+  content: "Footer · Klick zum Bearbeiten";
+  position: absolute;
+  right: 0;
+  top: -17px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--primary);
+  color: #fff;
+  font: 500 10px/1.4 var(--font-sans);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+.editor-canvas.hv-baustein-layout .hv-page-sim-footer-overlay.is-interactive:hover::after,
+.editor-canvas.hv-baustein-layout .hv-page-sim-footer-overlay.is-interactive:focus-visible::after {
+  opacity: 1;
 }
 .editor-canvas.hv-baustein-layout .tiptap-surface .hv-page-sim-next {
   margin-top: var(--hv-page-sim-gap) !important;

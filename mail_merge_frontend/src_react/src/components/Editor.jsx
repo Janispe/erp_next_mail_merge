@@ -96,9 +96,35 @@ function clearPageSimulation(dom) {
 
 function clearPageSimulationLayout(canvas) {
 	if (!canvas) return;
+	updateFooterSourcePlacement(canvas.querySelector(".tiptap-surface"), false);
 	canvas.querySelectorAll(":scope > .hv-page-sim-sheet").forEach((el) => el.remove());
 	canvas.style.removeProperty("--hv-editor-layout-min-height");
 	delete canvas.__hvPageSimulationPages;
+}
+
+function updateFooterSourcePlacement(pm, enabled = true) {
+	if (!pm) return null;
+	pm.querySelectorAll(".hv-footer-source").forEach((el) => el.classList.remove("hv-footer-source"));
+	pm.querySelectorAll(".hv-footer-source-row").forEach((el) => el.classList.remove("hv-footer-source-row"));
+	if (!enabled) return null;
+
+	const sources = Array.from(pm.querySelectorAll('[data-hv-baustein-name*="Footer" i]'));
+	for (const source of sources) {
+		source.classList.add("hv-footer-source");
+		let block = source;
+		while (block.parentElement && block.parentElement !== pm) block = block.parentElement;
+		if (block.parentElement !== pm) continue;
+
+		const remaining = block.cloneNode(true);
+		remaining.querySelectorAll('[data-hv-baustein-name*="Footer" i]').forEach((el) => el.remove());
+		remaining.querySelectorAll("br, .ProseMirror-separator").forEach((el) => el.remove());
+		const hasText = !!remaining.textContent?.trim();
+		const hasContent = !!remaining.querySelector(
+			'img, table, hr, [data-hv-kind="baustein"], [data-hv-kind="placeholder"], [data-hv-kind="jinja-inline"]'
+		);
+		if (!hasText && !hasContent) block.classList.add("hv-footer-source-row");
+	}
+	return sources[0] || null;
 }
 
 // Fuer eine neue Pagination brauchen wir die natuerlichen Elementpositionen
@@ -247,6 +273,7 @@ function renderPageSimulationSheets(canvas, pages, contentBottom) {
 function applyPageSimulation(canvas, editor) {
 	const pm = editor?.view?.dom;
 	if (!canvas || !pm) return;
+	updateFooterSourcePlacement(pm, true);
 
 	const measured = measureWithoutPageSimulation(pm, () =>
 		collectPageBreakCandidates(editor)
@@ -366,6 +393,8 @@ function applyFooterOverlays(canvas, editor) {
 	if (!canvas) return;
 	const footerHtml = (typeof window !== "undefined" && window.__hvEditorFooterHtml) || "";
 	const existing = canvas.querySelectorAll(".hv-page-sim-footer-overlay");
+	const footerSource =
+		editor?.view?.dom?.querySelector('[data-hv-baustein-name*="Footer" i]') || null;
 	if (!footerHtml) {
 		existing.forEach((el) => el.remove());
 		return;
@@ -405,6 +434,41 @@ function applyFooterOverlays(canvas, editor) {
 			overlay.innerHTML = footerHtml;
 			overlay.dataset.footerHtml = footerHtml;
 		}
+		const canOpenFooter = !!footerSource;
+		const footerName = footerSource?.dataset?.hvBausteinName || "Footer";
+		const openFooter = () => {
+			const rect = overlay.getBoundingClientRect();
+			window.dispatchEvent(
+				new CustomEvent("hv-baustein-popover", {
+					detail: {
+						name: footerName,
+						rect: { left: rect.left, bottom: rect.bottom, top: rect.top },
+					},
+				})
+			);
+		};
+		overlay.classList.toggle("is-interactive", canOpenFooter);
+		overlay.tabIndex = canOpenFooter ? 0 : -1;
+		overlay.setAttribute("role", canOpenFooter ? "button" : "presentation");
+		overlay.setAttribute(
+			"aria-label",
+			canOpenFooter ? "Footer-Baustein bearbeiten" : "Gerenderter Seitenfooter"
+		);
+		overlay.title = canOpenFooter ? "Klick: Footer-Baustein bearbeiten" : "";
+		overlay.onclick = canOpenFooter
+			? (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				openFooter();
+			}
+			: null;
+		overlay.onkeydown = canOpenFooter
+			? (event) => {
+				if (event.key !== "Enter" && event.key !== " ") return;
+				event.preventDefault();
+				openFooter();
+			}
+			: null;
 	});
 }
 
@@ -967,6 +1031,12 @@ export const Editor = ({
 			schedulePageSimulation(editor);
 		},
 	});
+
+	useEffect(() => {
+		// NodeViews aktualisieren ihre Preview-DOM beim Refresh. Danach die
+		// Footer-Zeile erneut aus dem Textfluss nehmen und die Seiten neu messen.
+		schedulePageSimulation(editor);
+	}, [editor, bausteinLayoutMode, bausteinPreviews, placeholderPreviews]);
 
 	useEffect(() => {
 		// Footer-HTML im window ablegen — schedulePageSimulation liest es von dort
