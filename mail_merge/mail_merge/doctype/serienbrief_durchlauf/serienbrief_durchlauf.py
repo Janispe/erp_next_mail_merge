@@ -1370,7 +1370,8 @@ class SerienbriefDurchlauf(Document):
 		).strip()
 		objekt = cstr(getattr(footer_doc, "objekt", None) or "").strip()
 		row = frappe._dict(iteration_doctype=iteration_doctype, objekt=objekt)
-		if iteration_doctype and objekt:
+		row._iteration_doc = getattr(footer_doc, "_iteration_doc", None)
+		if row._iteration_doc is None and iteration_doctype and objekt:
 			try:
 				row._iteration_doc = frappe.get_cached_doc(iteration_doctype, objekt)
 			except Exception:
@@ -2776,6 +2777,12 @@ def _dig_attr(source: Any, key: str) -> Any:
 		if 0 <= idx < len(source):
 			return source[idx]
 		return None
+
+	path_resolver = getattr(source, "resolve_serienbrief_path_segment", None)
+	if callable(path_resolver):
+		resolved = path_resolver(key)
+		if resolved is not None:
+			return resolved
 
 	return getattr(source, key, None)
 
