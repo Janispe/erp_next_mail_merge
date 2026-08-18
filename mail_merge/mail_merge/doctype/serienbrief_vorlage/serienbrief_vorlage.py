@@ -964,6 +964,11 @@ def _split_preview_context(druck_schwarz_weiss: bool = False, template_doc=None)
 			werte=frappe._dict(frist="31.12.2024"),
 		),
 		"outputs": frappe._dict(),
+		# Der Split-Preview benutzt den normalen Durchlauf-Renderer. Nur diese
+		# beiden Hooks unterscheiden die Darstellung lückenhafter Mock-Daten von
+		# echten Dokumenten (gelbe Beispielwerte statt harter Pfadfehler).
+		"_serienbrief_finalize": _split_preview_finalize_value,
+		"_serienbrief_on_unresolvable": _split_preview_token_fallback,
 		# Frappe-Proxy fuer Vorlagen, die ``frappe.db.get_all/get_value/exists/...``
 		# direkt aufrufen. Mit Mock-Args (z.B. ``filters={"x": objekt.parent}``)
 		# liefert der Proxy sichere Defaults statt zu crashen.
@@ -1521,133 +1526,91 @@ def _build_raw_template_html(template_doc) -> str:
 
 
 def _build_split_preview_html(template_doc, druck_schwarz_weiss: bool = False) -> str:
-	"""Build the split preview HTML by pre-rendering each Textbaustein with its own
-	preview defaults, rendering the template's standard text with the base context,
-	and assembling the result without a further outer Jinja pass.
+	"""Rendert Beispielwerte durch denselben Segmentpfad wie einen echten Durchlauf.
+
+	Nur das Iterationsobjekt, Frappe-Zugriffe und fehlende Eingabewerte sind
+	Mocks. Baustein-Reihenfolge, Variablenauflösung, ``outputs`` und Jinja laufen
+	über ``SerienbriefDurchlauf._render_template_content``.
 	"""
-	standard_text = _get_template_template_source(template_doc).strip()
-	content_position = cstr(getattr(template_doc, "content_position", "")).strip() or "Nach Bausteinen"
-	inline_mode = bool(standard_text and ("baustein(" in standard_text or "textbaustein(" in standard_text))
+	from frappe.utils import today
 
-	# Vorlage-Level-Variablen einmal vorab auflösen — die Werte fließen sowohl
-	# in den Standard-Text als auch in jeden Baustein-Render. Block-Defaults
-	# überlagern Template-Defaults bei Namensgleichheit (Bausteine sind
-	# spezifischer als ihre umgebende Vorlage).
-	template_defaults = _preview_defaults_for_template(
+	from mail_merge.mail_merge.doctype.serienbrief_durchlauf.serienbrief_durchlauf import (
+		_build_value_override_mapping,
+	)
+
+	durchlauf = frappe.new_doc("Serienbrief Durchlauf")
+	durchlauf.title = f"Vorschau: {template_doc.title or template_doc.name}"
+	durchlauf.vorlage = template_doc.name
+	durchlauf.date = today()
+	durchlauf._druck_schwarz_weiss = bool(druck_schwarz_weiss)
+	durchlauf.iteration_doctype = cstr(
+		getattr(template_doc, "haupt_verteil_objekt", None) or ""
+	).strip()
+
+	# Ungespeicherte Editor-Zuordnungen müssen wie bei der echten Live-Vorschau
+	# aus dem in-memory Template kommen, nicht aus dem Dokument-Cache.
+	inline_pfade = frappe.parse_json(template_doc.get("inline_baustein_pfade") or "{}")
+	durchlauf._inline_bp_cache = inline_pfade if isinstance(inline_pfade, dict) else {}
+	inline_werte = frappe.parse_json(template_doc.get("inline_baustein_werte") or "{}")
+	durchlauf._inline_bv_cache = inline_werte if isinstance(inline_werte, dict) else {}
+
+	context = _split_preview_context(
+		druck_schwarz_weiss=druck_schwarz_weiss,
+		template_doc=template_doc,
+	)
+	context["_serienbrief_value_overrides"] = _build_value_override_mapping(
 		template_doc,
-		base_context=_split_preview_context(
-			druck_schwarz_weiss=druck_schwarz_weiss,
-			template_doc=template_doc,
-		),
+		durchlauf,
 	)
 
-	def is_footer_block(block_doc) -> bool:
-		return cstr(getattr(block_doc, "render_position", None) or "Body").strip() == "Footer"
+	try:
+		# Zuerst die produktive Auflösung; Mock-Defaults füllen ausschließlich
+		# danach noch offene Variablen.
+		durchlauf._apply_template_variables(context, template_doc)
+		for key, value in _preview_defaults_for_template(
+			template_doc,
+			base_context=context,
+		).items():
+			if key not in context or context.get(key) is None:
+				context[key] = value
 
-	def render_block(block_name: str, wrap: bool = True) -> str:
-		# wrap=False: rendert nur den nackten Baustein-Inhalt — für Inline-Substitution
-		# in einer ``{{ baustein("…") }}``-Vorlage. Der ``<div class="serienbrief-block">``
-		# Wrapper wäre dort fatal: viele Vorlagen schreiben ``<p>{{ baustein("X") }}</p>``,
-		# ein <div> im <p> ist invalides HTML und Chrome auto-schließt das <p>, was
-		# Phantom-leere ``<p></p>`` plus 12px ``margin-bottom`` vom Wrapper zu einem
-		# 2-Leerzeilen-Loch zusammenrechnet. Der echte Durchlauf inlined den Baustein
-		# direkt (siehe _render_inline_textbaustein), die Preview muss das spiegeln.
-		name = cstr(block_name).strip()
-		if not name:
-			return ""
-		try:
-			block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", name)
-		except frappe.DoesNotExistError:
-			return ""
-		if is_footer_block(block_doc):
-			return ""
-		source = _get_block_template_source(block_doc).strip()
-		if not source:
-			return ""
-		block_defaults = _preview_defaults_for_block(
-			block_doc,
-			base_context=_split_preview_context(
-				druck_schwarz_weiss=druck_schwarz_weiss,
+		block_names: list[str] = []
+		for match in re.finditer(
+			r"\{\{\s*(?:baustein|textbaustein)\(\s*['\"]([^'\"]+)['\"]\s*\)\s*\}\}",
+			_get_template_template_source(template_doc),
+		):
+			name = cstr(match.group(1)).strip()
+			if name and name not in block_names:
+				block_names.append(name)
+		for row in template_doc.get("textbausteine") or []:
+			name = cstr(getattr(row, "baustein", None) or "").strip()
+			if name and name not in block_names:
+				block_names.append(name)
+
+		preview_block_defaults: dict[str, dict[str, Any]] = {}
+		for name in block_names:
+			try:
+				block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", name)
+			except frappe.DoesNotExistError:
+				continue
+			preview_block_defaults[name] = _preview_defaults_for_block(
+				block_doc,
+				base_context=context,
 				template_doc=template_doc,
-			),
-			template_doc=template_doc,
-		)
-		merged = {**template_defaults, **block_defaults}
-		rendered = _render_split_preview_source(
-			source,
-			extra_context=merged,
-			druck_schwarz_weiss=druck_schwarz_weiss,
-			template_doc=template_doc,
-		)
-		if not wrap:
-			return rendered
-		return f'<div class="serienbrief-block" data-block="{cstr(block_doc.name)}">{rendered}</div>'
+			)
+		durchlauf._preview_block_defaults = preview_block_defaults
 
-	if inline_mode:
-		pattern = re.compile(
-			r"\{\{\s*(?:baustein|textbaustein)\(\s*['\\\"]([^'\\\"]+)['\\\"]\s*\)\s*\}\}"
-		)
-		# Protect already-rendered baustein HTML from the outer Jinja pass over standard text.
-		rendered_blocks: list[str] = []
-
-		def _placeholder(match) -> str:
-			rendered_blocks.append(render_block(match.group(1), wrap=False))
-			return f"<!--HV_BLOCK_{len(rendered_blocks) - 1}-->"
-
-		standard_with_placeholders = pattern.sub(_placeholder, standard_text)
-		rendered_standard = _render_split_preview_source(
-			standard_with_placeholders,
-			extra_context=template_defaults,
-			druck_schwarz_weiss=druck_schwarz_weiss,
-			template_doc=template_doc,
-		)
-
-		def _restore(match) -> str:
-			idx = int(match.group(1))
-			return rendered_blocks[idx] if 0 <= idx < len(rendered_blocks) else ""
-
-		body = re.sub(r"<!--HV_BLOCK_(\d+)-->", _restore, rendered_standard)
-		if rendered_blocks and body == rendered_standard and "hv-preview-error" in rendered_standard:
-			body = "\n".join([*rendered_blocks, rendered_standard])
-		if not body:
+		segments = durchlauf._render_template_content(template_doc, context)
+		if not segments:
 			return ""
-		return f'<div class="serienbrief-block serienbrief-content" data-block="standardtext">{body}</div>'
-
-	blocks: list[str] = []
-	for row in template_doc.get("textbausteine") or []:
-		block_name = getattr(row, "baustein", None)
-		if not block_name:
-			continue
-		rendered = render_block(cstr(block_name))
-		if rendered:
-			blocks.append(rendered)
-
-	rendered_standard_body = (
-		_render_split_preview_source(
-			standard_text,
-			extra_context=template_defaults,
-			druck_schwarz_weiss=druck_schwarz_weiss,
-			template_doc=template_doc,
+		return durchlauf._render_segments_preview_html(segments)
+	except Exception as exc:
+		# Der PDF-Endpunkt soll bei einer unfertigen Vorlage weiterhin eine
+		# sichtbare rote Meldung liefern, nicht mit HTTP 500 abbrechen.
+		return (
+			'<div class="serienbrief-block serienbrief-content" data-block="standardtext">'
+			f"{_split_preview_error_marker(exc)}</div>"
 		)
-		if standard_text else ""
-	)
-	standard_html = (
-		f'<div class="serienbrief-block serienbrief-content" data-block="standardtext">{rendered_standard_body}</div>'
-		if rendered_standard_body
-		else ""
-	)
-
-	html_blocks: list[str] = []
-	if content_position == "Vor Bausteinen":
-		if standard_html:
-			html_blocks.append(standard_html)
-		html_blocks.extend(blocks)
-	else:
-		html_blocks.extend(blocks)
-		if standard_html:
-			html_blocks.append(standard_html)
-
-	return "\n".join(html_blocks)
 
 
 def _preview_pdf_options() -> Dict[str, str]:

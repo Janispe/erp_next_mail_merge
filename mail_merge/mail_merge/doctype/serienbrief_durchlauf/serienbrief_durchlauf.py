@@ -415,10 +415,23 @@ def _render_serienbrief_template(template: str, context: Dict[str, Any]) -> str:
 	if ".__" in template:
 		frappe.throw(_("Illegal template"))
 	# Pfad-Pre-Processing: simple {{ x.y.z }}-Tokens via Resolver auflösen.
-	template = _preprocess_simple_paths(template, context)
+	# Vorschau-Kontexte dürfen ausschließlich die Datenquelle/Fallback-Werte
+	# austauschen; der eigentliche Render-Pfad bleibt derselbe wie im Durchlauf.
+	# Der Hook liefert bei lückenhaften Mock-DocTypes deshalb einen sichtbaren
+	# Beispielwert, ohne hier eine zweite Preview-Render-Implementierung zu bauen.
+	on_unresolvable = context.get("_serienbrief_on_unresolvable")
+	template = _preprocess_simple_paths(
+		template,
+		context,
+		on_unresolvable=on_unresolvable if callable(on_unresolvable) else None,
+	)
 	# Frappes get_jenv() liefert eine Environment mit ChainableUndefined.
 	# Wir clonen sie + überschreiben undefined → StrictUndefined.
-	jenv = get_jenv().overlay(undefined=StrictUndefined, finalize=_strict_finalize)
+	finalize = context.get("_serienbrief_finalize")
+	jenv = get_jenv().overlay(
+		undefined=StrictUndefined,
+		finalize=finalize if callable(finalize) else _strict_finalize,
+	)
 	try:
 		return jenv.from_string(template).render(context)
 	except UndefinedError as exc:
@@ -1387,6 +1400,12 @@ class SerienbriefDurchlauf(Document):
 			outputs=base_context.get("outputs") or frappe._dict(),
 			baustein=frappe._dict(key=block_key, name=getattr(block_doc, "name", None), title=getattr(block_doc, "title", None)),
 		)
+		# Infrastrukturwerte des Parent-Kontexts mitgeben. Im normalen Durchlauf
+		# sind diese Keys nicht gesetzt; die Beispielvorschau nutzt sie, um nur
+		# Frappe/DocType-Zugriffe und die Darstellung der Mockwerte auszutauschen.
+		for key in ("frappe", "_serienbrief_finalize", "_serienbrief_on_unresolvable"):
+			if key in base_context:
+				block_context[key] = base_context[key]
 		self._apply_block_variables(block_context, base_context, block_doc, block_row)
 		return block_context
 
@@ -1690,6 +1709,13 @@ class SerienbriefDurchlauf(Document):
 			_get_block_default_path_map(block_doc, iteration_doctype) if iteration_doctype else {}
 		)
 		missing: list[str] = []
+		# Ausschließlich für einen Durchlauf mit Mock-DocTypes: Vorschauwerte sind
+		# der letzte Fallback nach allen echten Pfaden/Festwerten. Dadurch läuft
+		# dieselbe Variablenauflösung wie im Versand, ohne dass preview_default zu
+		# einem produktiven Standardwert wird.
+		preview_defaults = (getattr(self, "_preview_block_defaults", None) or {}).get(
+			getattr(block_doc, "name", ""),
+		) or {}
 
 		for variable in variable_defs:
 			variable_type = cstr(getattr(variable, "variable_type", None) or "").strip() or "Text"
@@ -1728,6 +1754,11 @@ class SerienbriefDurchlauf(Document):
 				# Pfade werden gegen den Parent-Context (mit ``objekt``)
 				# aufgelöst, nicht gegen den strict Block-Context.
 				resolved = _resolve_value_path(path, base_context)
+			if resolved is None and value is None:
+				if key in preview_defaults:
+					value = preview_defaults[key]
+				elif raw_key in preview_defaults:
+					value = preview_defaults[raw_key]
 			# Bewusst gesetzter Leer-String ("") ist ein gültiger Wert (optionale
 			# Baustein-Variable, vom User absichtlich leer gelassen). Nur echtes
 			# ``None`` (= Key überhaupt nicht im Override) zählt als „fehlt".

@@ -9,6 +9,69 @@ from mail_merge.mail_merge.doctype.serienbrief_vorlage import serienbrief_vorlag
 
 
 class TestSerienbriefVorlage(unittest.TestCase):
+	def test_split_preview_uses_durchlauf_pipeline_and_publishes_inline_outputs(self):
+		from mail_merge.mail_merge.doctype.serienbrief_durchlauf.serienbrief_durchlauf import (
+			SerienbriefDurchlauf,
+		)
+
+		durchlauf = SerienbriefDurchlauf({"doctype": "Serienbrief Durchlauf"})
+		block = frappe._dict(
+			name="Zaehler",
+			title="Zähler",
+			content_type="Textbaustein (Rich Text)",
+			text_content="Mieter",
+			render_position="Body",
+			variables=[],
+			outputs=[
+				frappe._dict(
+					output_name="anzahl",
+					value_path="serienbrief.count",
+				)
+			],
+		)
+		template = frappe._dict(
+			name="VORSCHAU-OUTPUTS",
+			title="Vorschau Outputs",
+			haupt_verteil_objekt="Mietvertrag",
+			content_type="Textbaustein (Rich Text)",
+			content=(
+				'{{ baustein("Zaehler") }} '
+				"{% if outputs.anzahl.anzahl < 2 %}hat{% else %}haben{% endif %}"
+			),
+			textbausteine=[
+				frappe._dict(
+					baustein="Zaehler",
+					baustein_key="anzahl",
+					pfad_zuordnung="",
+					variablen_werte="",
+				)
+			],
+			variables=[],
+			variablen_werte="",
+			pfad_zuordnung="",
+			inline_baustein_pfade="{}",
+			inline_baustein_werte="{}",
+		)
+
+		with patch.object(
+			serienbrief_vorlage.frappe,
+			"new_doc",
+			return_value=durchlauf,
+		), patch.object(
+			serienbrief_vorlage.frappe,
+			"get_cached_doc",
+			return_value=block,
+		), patch.object(
+			serienbrief_vorlage,
+			"_load_preview_profile_values",
+			return_value=({}, {}),
+		):
+			html = serienbrief_vorlage._build_split_preview_html(template)
+
+		self.assertIn("Mieter", html)
+		self.assertIn("hat", html)
+		self.assertNotIn("Vorlagenfehler", html)
+
 	def test_only_expendable_intermediate_version_can_be_deleted(self):
 		version = frappe._dict(
 			name="VERSION-2",
