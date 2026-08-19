@@ -753,6 +753,12 @@ const BausteinePane = ({
 const VAR_TYPES = ["Text", "String", "Zahl", "Bool", "Datum", "Doctype", "Doctype Liste"];
 const isDoctypeType = (t) => t === "Doctype" || t === "Doctype Liste";
 
+const boolSelectValue = (value) => {
+  if (value === true || value === 1 || ["true", "1", "yes", "on", "ja", "wahr"].includes(String(value).toLowerCase())) return "1";
+  if (value === false || value === 0 || ["false", "0", "no", "off", "nein", "falsch"].includes(String(value).toLowerCase())) return "0";
+  return "";
+};
+
 // Muss exakt frappe.scrub() entsprechen: " " und "-" -> "_", lowercase. Sonst stimmt der
 // im Brief eingefügte {{ name }} nicht mit dem Backend-Schlüssel (frappe.scrub) überein.
 const scrubName = (s) => String(s || "").replace(/[ -]/g, "_").toLowerCase();
@@ -933,11 +939,32 @@ const VariablesPane = ({
                   disabled={!editable}
                 />
               </>
+            ) : v.type === "Bool" ? (
+              <select
+                className="var-edit-sub var-edit-bool"
+                value={boolSelectValue(v.value)}
+                onChange={(e) => update(i, { value: e.target.value === "" ? "" : Number(e.target.value) })}
+                disabled={!editable}
+                aria-label={`Wert für ${v.variable || "Bool-Variable"}`}
+              >
+                <option value="">Bitte wählen…</option>
+                <option value="1">Wahr</option>
+                <option value="0">Falsch</option>
+              </select>
+            ) : v.type === "Text" ? (
+              <textarea
+                className="var-edit-sub var-edit-textarea"
+                placeholder="Wert"
+                value={v.value ?? ""}
+                onChange={(e) => update(i, { value: e.target.value })}
+                disabled={!editable}
+                rows={2}
+              />
             ) : (
               <input
                 className="var-edit-sub"
                 placeholder="Wert"
-                value={v.value || ""}
+                value={v.value ?? ""}
                 onChange={(e) => update(i, { value: e.target.value })}
                 disabled={!editable}
               />
