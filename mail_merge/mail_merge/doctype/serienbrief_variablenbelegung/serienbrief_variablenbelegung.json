@@ -1,0 +1,49 @@
+{
+ "actions": [],
+ "creation": "2026-08-19 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "bezeichnung",
+  "ist_standard",
+  "werte"
+ ],
+ "fields": [
+  {
+   "fieldname": "bezeichnung",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Bezeichnung",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "Wird bei neuen Serienbrief-Durchläufen automatisch übernommen.",
+   "fieldname": "ist_standard",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Standard"
+  },
+  {
+   "description": "Vom Serienbrief-Editor verwaltete Werte und Pfade als JSON.",
+   "fieldname": "werte",
+   "fieldtype": "Long Text",
+   "hidden": 1,
+   "label": "Belegung (JSON)",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-08-19 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Mail Merge",
+ "name": "Serienbrief Variablenbelegung",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

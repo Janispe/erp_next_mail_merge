@@ -32,6 +32,7 @@ const BEISPIEL = { id: null, label: "Beispielwerte" };
 const EMPTY_TEMPLATE = {
   id: null, title: "", kategorie: "", haupt_verteil_objekt: "",
   content_type: "", htmlContent: "", bausteinPaths: {}, bausteinKeys: {}, variables: [], canWrite: false,
+  variableAssignments: [],
 };
 
 export const App = () => {
@@ -89,6 +90,8 @@ export const App = () => {
   const [jinjaPopover, setJinjaPopover] = useState(null);
   // Vorlagen-Variablen (Definition + Wert/Pfad), im Editor bearbeitbar.
   const [variables, setVariables] = useState([]);
+  // Mehrere benannte Wert-/Pfad-Sätze, die auf dieselben Variablendefinitionen passen.
+  const [variableAssignments, setVariableAssignments] = useState([]);
   // Transiente Vorschau-Werte für Eingabe-Variablen { key: wert } — NICHT gespeichert,
   // nur für die Live-Vorschau (siehe PreviewPane „Vorschau-Werte").
   const [previewVars, setPreviewVars] = useState({});
@@ -179,6 +182,7 @@ export const App = () => {
         setBausteinValues(t.bausteinValues || {});
         setBausteinKeys(t.bausteinKeys || {});
         setVariables(t.variables || []);
+        setVariableAssignments(t.variableAssignments || []);
         setPreviewVars({});
         setPendingRestore(null);
         setDirty(false);
@@ -283,6 +287,7 @@ export const App = () => {
         bausteinValues,
         bausteinKeys,
         variables,
+        variableAssignments,
         title,
         pendingRestore?.name,
         forceNewVersion,
@@ -406,6 +411,7 @@ export const App = () => {
       setBausteinValues(draft.bausteinValues || {});
       setBausteinKeys(draft.bausteinKeys || {});
       setVariables(draft.variables || []);
+      setVariableAssignments(draft.variableAssignments || []);
       setPreviewVars({});
       setPendingRestore({
         name: draft.restoredFromVersion || versionName,
@@ -969,9 +975,11 @@ export const App = () => {
           onMaximizePreview={() => setPdfMaximized(true)}
           onResizeStart={onResizeStart}
           variables={variables}
+          variableAssignments={variableAssignments}
           placeholderPaths={placeholderPaths}
           editable={editable}
           onVariablesChange={(v) => { if (!editable) return; setVariables(v); setDirty(true); scheduleBausteinPreview(); }}
+          onVariableAssignmentsChange={(v) => { if (!editable) return; setVariableAssignments(v); setDirty(true); }}
         />
       </div>
 

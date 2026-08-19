@@ -17,6 +17,7 @@
   "jinja_content",
   "content_position",
   "variables",
+  "variablenbelegungen",
   "textbausteine",
   "pfad_zuordnung",
   "variablen_werte",
@@ -99,6 +100,13 @@
    "fieldtype": "Table",
    "label": "Variablen",
    "options": "Serienbrief Vorlage Variable"
+  },
+  {
+   "description": "Benannte, wiederverwendbare Sätze aus Variablenwerten und Pfaden.",
+   "fieldname": "variablenbelegungen",
+   "fieldtype": "Table",
+   "label": "Gespeicherte Variablenbelegungen",
+   "options": "Serienbrief Variablenbelegung"
   },
   {
    "fieldname": "textbausteine",

@@ -245,6 +245,19 @@
 }
 .dl-config-input:focus,
 .dl-config-select:focus { outline: none; border-color: var(--border-focus); }
+.dl-assignment-field {
+  margin-bottom: 10px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+.dl-assignment-hint {
+  margin-top: 5px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  line-height: 1.3;
+}
 
 /* Variables */
 .dl-vars { display: flex; flex-direction: column; gap: 6px; }

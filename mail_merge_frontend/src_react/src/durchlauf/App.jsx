@@ -151,7 +151,14 @@ const Header = ({
 };
 
 // ============== Config column ==============
-const ConfigColumn = ({ durchlauf, onUpdateVar }) => {
+const ConfigColumn = ({ durchlauf, onUpdateVar, onApplyAssignment }) => {
+  const [selectedAssignment, setSelectedAssignment] = useState("");
+  const assignments = durchlauf.variable_assignments || [];
+  const applyAssignment = (label) => {
+    setSelectedAssignment(label);
+    const assignment = assignments.find((item) => item.label === label);
+    if (assignment && onApplyAssignment) onApplyAssignment(assignment);
+  };
   return (
     <aside className="dl-config">
       <div className="dl-section">
@@ -196,6 +203,25 @@ const ConfigColumn = ({ durchlauf, onUpdateVar }) => {
           Vorlagen-Variablen
           <button title="Variable hinzufügen"><Icon name="plus" size={11}/></button>
         </div>
+        {assignments.length > 0 && (
+          <div className="dl-config-field dl-assignment-field">
+            <label className="dl-config-label">Gespeicherte Belegung</label>
+            <select
+              className="dl-config-select"
+              value={selectedAssignment}
+              onChange={(event) => applyAssignment(event.target.value)}
+              disabled={!durchlauf.can_write}
+            >
+              <option value="">Belegung wählen…</option>
+              {assignments.map((item) => (
+                <option key={item.label} value={item.label}>
+                  {item.is_default ? "★ " : ""}{item.label}
+                </option>
+              ))}
+            </select>
+            <div className="dl-assignment-hint">Die Werte werden in diesen Durchlauf kopiert.</div>
+          </div>
+        )}
         <div className="dl-vars">
           {durchlauf.variables.map((v, i) => (
             <div key={i} className="dl-var">
@@ -207,8 +233,10 @@ const ConfigColumn = ({ durchlauf, onUpdateVar }) => {
               {v.desc && <div className="dl-var-desc">{v.desc}</div>}
               <input
                 className="dl-var-input"
-                defaultValue={v.value}
+                type={v.type === "Datum" ? "date" : "text"}
+                value={v.value ?? ""}
                 onChange={e => onUpdateVar(v.name, e.target.value)}
+                disabled={!durchlauf.can_write}
               />
             </div>
           ))}
@@ -751,6 +779,18 @@ const DurchlaufApp = () => {
     });
   };
 
+  const applyVariableAssignment = (assignment) => {
+    const values = assignment?.values || {};
+    setVars((prev) => {
+      const next = prev.map((v) => ({
+        ...v,
+        value: Object.prototype.hasOwnProperty.call(values, v.name) ? (values[v.name] ?? "") : "",
+      }));
+      scheduleSave(next, perRecipientOverrides);
+      return next;
+    });
+  };
+
   const setRecipientOverride = (recipientId, varName, value) => {
     setPerRecipientOverrides(prev => {
       const next = { ...prev };
@@ -1012,7 +1052,11 @@ const DurchlaufApp = () => {
         onDruckSchwarzWeissChange={setDruckSchwarzWeiss}
       />
       <div className="dl-main">
-        <ConfigColumn durchlauf={durchlauf} onUpdateVar={onUpdateVar}/>
+        <ConfigColumn
+          durchlauf={durchlauf}
+          onUpdateVar={onUpdateVar}
+          onApplyAssignment={applyVariableAssignment}
+        />
         <RecipientsList
           recipients={filtered}
           filter={filter}

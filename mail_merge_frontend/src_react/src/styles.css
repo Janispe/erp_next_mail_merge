@@ -3924,6 +3924,47 @@ span[style*="color"] > .chip {
 .var-edit-actions { margin-top: 6px; display: flex; justify-content: flex-end; align-items: center; gap: 10px; }
 .var-edit-optional { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-2); cursor: pointer; user-select: none; }
 .var-edit-optional input { margin: 0; }
+.var-profile-box {
+  margin: 0 0 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+}
+.var-profile-title { margin-bottom: 7px; font-size: 11.5px; font-weight: 650; color: var(--text); }
+.var-profile-row { display: flex; align-items: center; gap: 6px; }
+.var-profile-select {
+  min-width: 0;
+  flex: 1;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11.5px;
+  padding: 0 7px;
+}
+.var-profile-save,
+.var-profile-actions button {
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 11px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+.var-profile-save { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.var-profile-save:hover,
+.var-profile-actions button:hover { border-color: var(--primary); color: var(--primary); }
+.var-profile-save:disabled,
+.var-profile-actions button:disabled,
+.var-profile-select:disabled { opacity: .55; cursor: not-allowed; }
+.var-profile-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.var-profile-actions button { height: 25px; }
+.var-profile-actions button.is-danger:hover { border-color: var(--danger); color: var(--danger); }
+.var-profile-hint { margin-top: 7px; color: var(--text-faint); font-size: 10.5px; line-height: 1.35; }
 .var-insert-btn {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 11px; padding: 2px 8px; border: 1px solid var(--border);

@@ -96,6 +96,11 @@ export async function loadDurchlauf() {
 			default: v.default ?? "",
 			value: v.value ?? "",
 		})),
+		variable_assignments: (d.variable_assignments || []).map((item) => ({
+			label: item.label || "",
+			is_default: !!item.is_default,
+			values: item.values || {},
+		})),
 	};
 	return {
 		durchlauf,

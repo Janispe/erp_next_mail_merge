@@ -757,8 +757,35 @@ const isDoctypeType = (t) => t === "Doctype" || t === "Doctype Liste";
 // im Brief eingefügte {{ name }} nicht mit dem Backend-Schlüssel (frappe.scrub) überein.
 const scrubName = (s) => String(s || "").replace(/[ -]/g, "_").toLowerCase();
 
-const VariablesPane = ({ variables, onChange, onInsert, placeholderPaths, editable = true }) => {
+const captureVariableAssignment = (vars) => {
+  const values = {};
+  for (const v of vars || []) {
+    const key = scrubName(v.variable);
+    if (!key) continue;
+    if (isDoctypeType(v.type)) values[key] = { path: v.path || "" };
+    else values[key] = { value: v.value ?? "" };
+  }
+  return values;
+};
+
+const applyVariableAssignment = (vars, profile) => {
+  const values = profile?.values || {};
+  return (vars || []).map((v) => {
+    const entry = values[scrubName(v.variable)] || {};
+    return isDoctypeType(v.type)
+      ? { ...v, path: entry.path ?? "" }
+      : { ...v, value: entry.value ?? "" };
+  });
+};
+
+const VariablesPane = ({
+  variables, onChange, onInsert, placeholderPaths,
+  variableAssignments, onVariableAssignmentsChange, templateId, editable = true,
+}) => {
   const vars = variables || [];
+  const profiles = variableAssignments || [];
+  const [selectedProfile, setSelectedProfile] = useState("");
+  useEffect(() => setSelectedProfile(""), [templateId]);
   const update = (i, patch) =>
     onChange && onChange(vars.map((v, idx) => (idx === i ? { ...v, ...patch } : v)));
   const remove = (i) => onChange && onChange(vars.filter((_, idx) => idx !== i));
@@ -768,12 +795,88 @@ const VariablesPane = ({ variables, onChange, onInsert, placeholderPaths, editab
       ...vars,
       { variable: "", type: "Text", label: "", reference_doctype: "", value: "", path: "" },
     ]);
+  const selectProfile = (label) => {
+    setSelectedProfile(label);
+    if (!label) return;
+    const profile = profiles.find((item) => item.label === label);
+    if (profile && onChange) onChange(applyVariableAssignment(vars, profile));
+  };
+  const saveAsProfile = () => {
+    if (!editable || !onVariableAssignmentsChange) return;
+    const requested = window.prompt("Bezeichnung der Variablenbelegung:", selectedProfile || "");
+    const label = String(requested || "").trim();
+    if (!label) return;
+    const existingIndex = profiles.findIndex((item) => item.label.toLocaleLowerCase() === label.toLocaleLowerCase());
+    const nextProfile = {
+      label: existingIndex >= 0 ? profiles[existingIndex].label : label,
+      is_default: existingIndex >= 0 ? !!profiles[existingIndex].is_default : profiles.length === 0,
+      values: captureVariableAssignment(vars),
+    };
+    if (existingIndex >= 0) {
+      if (!window.confirm(`Variablenbelegung „${profiles[existingIndex].label}“ überschreiben?`)) return;
+      onVariableAssignmentsChange(profiles.map((item, index) => index === existingIndex ? nextProfile : item));
+    } else {
+      onVariableAssignmentsChange([...profiles, nextProfile]);
+    }
+    setSelectedProfile(nextProfile.label);
+  };
+  const deleteProfile = () => {
+    if (!selectedProfile || !window.confirm(`Variablenbelegung „${selectedProfile}“ löschen?`)) return;
+    onVariableAssignmentsChange && onVariableAssignmentsChange(
+      profiles.filter((item) => item.label !== selectedProfile),
+    );
+    setSelectedProfile("");
+  };
+  const toggleDefaultProfile = () => {
+    if (!selectedProfile || !onVariableAssignmentsChange) return;
+    const selected = profiles.find((item) => item.label === selectedProfile);
+    const makeDefault = !selected?.is_default;
+    onVariableAssignmentsChange(profiles.map((item) => ({
+      ...item,
+      is_default: makeDefault ? item.label === selectedProfile : false,
+    })));
+  };
+  const activeProfile = profiles.find((item) => item.label === selectedProfile);
 
   return (
     <div className="var-pane">
       <div style={{ marginBottom: 10, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
         Vorlagen-Variablen: anlegen, Typ + Wert (Text) bzw. Pfad (Doctype) setzen. Im Brief via{" "}
         <code>{"{{ name }}"}</code> nutzbar. Speichern oben rechts.
+      </div>
+      <div className="var-profile-box">
+        <div className="var-profile-title">Gespeicherte Belegungen</div>
+        <div className="var-profile-row">
+          <select
+            className="var-profile-select"
+            value={selectedProfile}
+            onChange={(event) => selectProfile(event.target.value)}
+            disabled={!editable || profiles.length === 0}
+            title="Eine gespeicherte Belegung sofort übernehmen"
+          >
+            <option value="">Belegung wählen…</option>
+            {profiles.map((profile) => (
+              <option key={profile.label} value={profile.label}>
+                {profile.is_default ? "★ " : ""}{profile.label}
+              </option>
+            ))}
+          </select>
+          <button className="var-profile-save" onClick={saveAsProfile} disabled={!editable || vars.length === 0}>
+            <Icon name="save" size={11}/> Aktuelle speichern
+          </button>
+        </div>
+        {activeProfile && (
+          <div className="var-profile-actions">
+            <button onClick={saveAsProfile} disabled={!editable}>Überschreiben</button>
+            <button onClick={toggleDefaultProfile} disabled={!editable}>
+              {activeProfile.is_default ? "Standard entfernen" : "Als Standard"}
+            </button>
+            <button className="is-danger" onClick={deleteProfile} disabled={!editable}>Löschen</button>
+          </div>
+        )}
+        <div className="var-profile-hint">
+          Die Auswahl ersetzt die aktuellen Werte und Pfade. Gespeichert wird die Änderung zusammen mit der Vorlage.
+        </div>
       </div>
       <datalist id="hv-var-path-suggestions">
         {(placeholderPaths || []).map((p, i) => (
@@ -881,7 +984,8 @@ export const Sidebar = ({
   onChangeRecipient, onSearchRecipients,
   previewPdf, previewLoading, previewError, previewMode, onRefreshPreview,
   onInsertPlaceholder, onInsertBaustein, onLoadBausteinPreview, onMaximizePreview, onResizeStart,
-  variables, placeholderPaths, onVariablesChange, editable = true,
+  variables, variableAssignments, placeholderPaths, onVariablesChange,
+  onVariableAssignmentsChange, editable = true,
   druckSchwarzWeiss, onDruckSchwarzWeissChange,
   variablesForPreview, previewVars, onPreviewVarChange,
 }) => {
@@ -943,6 +1047,9 @@ export const Sidebar = ({
         {tab === "variables" && (
           <VariablesPane
             variables={variables}
+            variableAssignments={variableAssignments}
+            onVariableAssignmentsChange={onVariableAssignmentsChange}
+            templateId={template.id}
             onChange={onVariablesChange}
             onInsert={onInsertPlaceholder}
             placeholderPaths={placeholderPaths}

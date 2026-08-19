@@ -38,6 +38,7 @@ class SerienbriefVorlage(Document):
 		content_type = (getattr(self, "content_type", "") or "").strip() or "Textbaustein (Rich Text)"
 		self.content_type = content_type
 		self._ensure_baustein_keys()
+		self._ensure_variablenbelegungen()
 		if content_type == "HTML + Jinja":
 			self.html_content = cstr(getattr(self, "html_content", "") or "")
 			self.jinja_content = cstr(getattr(self, "jinja_content", "") or "")
@@ -61,6 +62,33 @@ class SerienbriefVorlage(Document):
 			base = frappe.scrub(block_name) or "baustein"
 			seen[base] = seen.get(base, 0) + 1
 			row.baustein_key = base if seen[base] == 1 else f"{base}_{seen[base]}"
+
+	def _ensure_variablenbelegungen(self):
+		"""Normalisiert Profile und erzwingt eindeutige Namen/einen Standard."""
+		known_variables = {
+			frappe.scrub(cstr(getattr(row, "variable", "") or "").strip())
+			for row in (self.get("variables") or [])
+			if cstr(getattr(row, "variable", "") or "").strip()
+		}
+		seen: set[str] = set()
+		standard_count = 0
+		for row in self.get("variablenbelegungen") or []:
+			label = cstr(getattr(row, "bezeichnung", "") or "").strip()
+			if not label:
+				frappe.throw(_("Jede Variablenbelegung benötigt eine Bezeichnung."))
+			row.bezeichnung = label
+			label_key = label.casefold()
+			if label_key in seen:
+				frappe.throw(_("Die Variablenbelegung „{0}“ ist mehrfach vorhanden.").format(label))
+			seen.add(label_key)
+			if cint(getattr(row, "ist_standard", 0)):
+				standard_count += 1
+			werte = _normalize_variablenbelegung_values(
+				getattr(row, "werte", None), known_variables=known_variables
+			)
+			row.werte = frappe.as_json(werte) if werte else ""
+		if standard_count > 1:
+			frappe.throw(_("Es kann nur eine Variablenbelegung als Standard markiert sein."))
 
 	def after_insert(self):
 		_create_template_version(
@@ -107,7 +135,7 @@ _VERSION_SCALAR_FIELDS = (
 	"inline_baustein_werte",
 	"description",
 )
-_VERSION_CHILD_FIELDS = ("variables", "textbausteine")
+_VERSION_CHILD_FIELDS = ("variables", "variablenbelegungen", "textbausteine")
 _VERSION_CHILD_META_FIELDS = {
 	"doctype", "name", "owner", "creation", "modified", "modified_by",
 	"parent", "parentfield", "parenttype", "docstatus",
@@ -192,6 +220,8 @@ def _snapshot_change_sections(before: Dict[str, Any] | None, after: Dict[str, An
 		for field in ("pfad_zuordnung", "variablen_werte")
 	):
 		sections.append(_("Variablen"))
+	if before.get("variablenbelegungen") != after.get("variablenbelegungen"):
+		sections.append(_("Variablenbelegungen"))
 	if before.get("textbausteine") != after.get("textbausteine") or any(
 		_snapshot_json_value(before, field) != _snapshot_json_value(after, field)
 		for field in ("inline_baustein_pfade", "inline_baustein_werte")
@@ -2686,6 +2716,18 @@ def _editor_template_payload(doc) -> Dict[str, Any]:
 				"path": pfade.get(key) or ((entry or {}).get("path") if entry else None),
 			}
 		)
+	variablenbelegungen = []
+	for row in doc.get("variablenbelegungen") or []:
+		label = cstr(getattr(row, "bezeichnung", "") or "").strip()
+		if not label:
+			continue
+		variablenbelegungen.append(
+			{
+				"label": label,
+				"is_default": bool(cint(getattr(row, "ist_standard", 0))),
+				"values": _normalize_variablenbelegung_values(getattr(row, "werte", None)),
+			}
+		)
 
 	return {
 		"id": doc.name,
@@ -2700,6 +2742,7 @@ def _editor_template_payload(doc) -> Dict[str, Any]:
 		"modified_by": doc.modified_by,
 		"can_write": can_write,
 		"variables": variables,
+		"variable_assignments": variablenbelegungen,
 		# Pro-Baustein Input-Pfad-Overrides für inline eingefügte Bausteine
 		# (für Doctype-/Doctype-Liste-Variablen).
 		"baustein_pfade": _parse_path_mapping(doc.get("inline_baustein_pfade")),
@@ -2725,6 +2768,69 @@ def get_editor_template(name: str | None = None) -> Dict[str, Any]:
 
 
 _VARIABLE_TEXT_TYPES = {"Text", "String", "Zahl", "Bool", "Datum"}
+
+
+def _normalize_variablenbelegung_values(
+	raw: str | Dict[str, Any] | None,
+	*,
+	known_variables: set[str] | None = None,
+) -> Dict[str, Dict[str, Any]]:
+	"""Normalisiert das persistierte Profilformat ``{variable: {value|path}}``.
+
+	Unbekannte Variablen werden beim Speichern entfernt. Dadurch bleiben Profile
+	nach dem Löschen oder Umbenennen einer Variablendefinition verwendbar, ohne
+	veraltete Schlüssel in neue Durchläufe zu übernehmen.
+	"""
+	try:
+		data = frappe.parse_json(raw) if isinstance(raw, str) else raw
+	except Exception:
+		data = {}
+	if not isinstance(data, dict):
+		return {}
+	normalized: Dict[str, Dict[str, Any]] = {}
+	for raw_key, raw_entry in data.items():
+		key = frappe.scrub(cstr(raw_key or "").strip())
+		if not key or (known_variables is not None and key not in known_variables):
+			continue
+		entry = raw_entry if isinstance(raw_entry, dict) else {"value": raw_entry}
+		path = cstr(entry.get("path") or "").strip()
+		if path:
+			normalized[key] = {"path": path}
+		elif "value" in entry:
+			# Auch leer/False/0 bewusst erhalten: Ein Profil ist ein vollständiger
+			# Belegungssatz und muss einen vorherigen Wert gezielt leeren können.
+			normalized[key] = {"value": entry.get("value")}
+	return normalized
+
+
+def _apply_editor_variablenbelegungen(doc, assignments) -> None:
+	data = frappe.parse_json(assignments) if isinstance(assignments, str) else assignments
+	if not isinstance(data, list):
+		frappe.throw(_("Variablenbelegungen müssen als Liste übergeben werden."))
+	known_variables = {
+		frappe.scrub(cstr(getattr(row, "variable", "") or "").strip())
+		for row in (doc.get("variables") or [])
+		if cstr(getattr(row, "variable", "") or "").strip()
+	}
+	rows = []
+	for item in data:
+		if not isinstance(item, dict):
+			continue
+		label = cstr(item.get("label") or item.get("bezeichnung") or "").strip()
+		if not label:
+			continue
+		values = _normalize_variablenbelegung_values(
+			item.get("values") if "values" in item else item.get("werte"),
+			known_variables=known_variables,
+		)
+		rows.append(
+			{
+				"bezeichnung": label,
+				"ist_standard": 1 if item.get("is_default") or item.get("ist_standard") else 0,
+				"werte": frappe.as_json(values) if values else "",
+			}
+		)
+	doc.set("variablenbelegungen", rows)
 
 
 def _apply_editor_variables(doc, variables) -> None:
@@ -2852,6 +2958,7 @@ def save_editor_template(
 	baustein_werte: str | None = None,
 	baustein_keys: str | None = None,
 	variables: str | None = None,
+	variable_assignments: str | None = None,
 	title: str | None = None,
 	restored_from_version: str | None = None,
 	force_new_version: int | str = 0,
@@ -2864,7 +2971,8 @@ def save_editor_template(
 	  Format { "<Baustein>": { "<Variable>": <Wert> } }.
 	baustein_keys (JSON) = Pro-Baustein Output-Key für inline Bausteine.
 	variables (JSON-Array) = Variablen-Definitionen inkl. Wert (Text) / Pfad (Doctype);
-	rebaut die variables-Child-Tabelle + variablen_werte + pfad_zuordnung."""
+	rebaut die variables-Child-Tabelle + variablen_werte + pfad_zuordnung.
+	variable_assignments (JSON-Array) = benannte, wiederverwendbare Belegungssätze."""
 	template_name = (name or "").strip()
 	if not template_name:
 		frappe.throw(_("Bitte eine Vorlage angeben."))
@@ -2896,6 +3004,8 @@ def save_editor_template(
 		doc.inline_baustein_werte = frappe.as_json(parsed_w) if parsed_w else ""
 	if variables is not None:
 		_apply_editor_variables(doc, variables)
+	if variable_assignments is not None:
+		_apply_editor_variablenbelegungen(doc, variable_assignments)
 	new_title = cstr(title).strip() if title is not None else ""
 	if new_title and new_title != cstr(doc.title).strip():
 		doc.title = new_title

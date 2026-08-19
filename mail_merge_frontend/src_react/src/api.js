@@ -66,6 +66,7 @@ function toEditorTemplate(t) {
 		bausteinValues: t.baustein_werte || {},
 		bausteinKeys: t.baustein_keys || {},
 		variables: t.variables || [],
+		variableAssignments: t.variable_assignments || [],
 		restoredFromVersion: t.restored_from_version || "",
 		restoredFromNumber: t.restored_from_number || 0,
 		blocks: [],
@@ -197,6 +198,7 @@ export async function saveTemplate(
 	bausteinValues,
 	bausteinKeys,
 	variables,
+	variableAssignments,
 	title,
 	restoredFromVersion,
 	forceNewVersion = false,
@@ -211,6 +213,7 @@ export async function saveTemplate(
 		baustein_werte: JSON.stringify(bausteinValues || {}),
 		baustein_keys: JSON.stringify(bausteinKeys || {}),
 		variables: JSON.stringify(variables || []),
+		variable_assignments: JSON.stringify(variableAssignments || []),
 	};
 	if (title != null) params.title = title;
 	if (restoredFromVersion) params.restored_from_version = restoredFromVersion;

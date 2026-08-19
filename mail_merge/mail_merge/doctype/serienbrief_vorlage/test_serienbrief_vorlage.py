@@ -278,14 +278,65 @@ class TestSerienbriefVorlage(unittest.TestCase):
 			inline_baustein_werte="{}",
 			description="Interne Notiz",
 			variables=[{"variable": "name", "variable_type": "Text", "idx": 1}],
+			variablenbelegungen=[
+				{
+					"bezeichnung": "Förmlich",
+					"ist_standard": 1,
+					"werte": '{"name":{"value":"Herr Mustermann"}}',
+					"idx": 1,
+				}
+			],
 			textbausteine=[{"baustein": "Briefkopf", "baustein_key": "briefkopf", "idx": 1}],
 		)
 		snapshot = serienbrief_vorlage._build_template_snapshot(doc)
 
 		self.assertEqual(snapshot["content"], "<p>Hallo {{ name }}</p>")
 		self.assertEqual(snapshot["variables"][0]["variable"], "name")
+		self.assertEqual(snapshot["variablenbelegungen"][0]["bezeichnung"], "Förmlich")
 		self.assertEqual(snapshot["textbausteine"][0]["baustein_key"], "briefkopf")
 		self.assertNotIn("parent", snapshot["variables"][0])
+
+	def test_variable_assignment_values_are_normalized_and_stale_keys_removed(self):
+		values = serienbrief_vorlage._normalize_variablenbelegung_values(
+			{
+				"Anrede Name": {"value": "Frau Beispiel"},
+				"objekt": {"path": "objekt.wohnung"},
+				"veraltet": {"value": "weg"},
+			},
+			known_variables={"anrede_name", "objekt"},
+		)
+
+		self.assertEqual(values["anrede_name"], {"value": "Frau Beispiel"})
+		self.assertEqual(values["objekt"], {"path": "objekt.wohnung"})
+		self.assertNotIn("veraltet", values)
+
+	def test_editor_applies_multiple_named_variable_assignments(self):
+		doc = Mock()
+		doc.get.side_effect = lambda field: (
+			[frappe._dict(variable="anrede"), frappe._dict(variable="ziel")]
+			if field == "variables"
+			else []
+		)
+		serienbrief_vorlage._apply_editor_variablenbelegungen(
+			doc,
+			[
+				{
+					"label": "Privat",
+					"is_default": True,
+					"values": {"anrede": {"value": "Hallo"}, "ziel": {"path": "objekt.name"}},
+				},
+				{
+					"label": "Förmlich",
+					"values": {"anrede": {"value": "Sehr geehrte Damen und Herren"}},
+				},
+			],
+		)
+
+		rows = doc.set.call_args.args[1]
+		self.assertEqual(doc.set.call_args.args[0], "variablenbelegungen")
+		self.assertEqual([row["bezeichnung"] for row in rows], ["Privat", "Förmlich"])
+		self.assertEqual(rows[0]["ist_standard"], 1)
+		self.assertIn('"objekt.name"', rows[0]["werte"])
 
 	def test_version_hash_is_stable_and_changes_with_content(self):
 		left = {"doctype": "Serienbrief Vorlage", "schema_version": 1, "content": "A"}

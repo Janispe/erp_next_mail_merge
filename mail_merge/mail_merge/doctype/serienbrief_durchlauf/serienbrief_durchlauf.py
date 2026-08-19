@@ -4194,6 +4194,7 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 
 	# Variablen: Definition (Vorlage) + Default (Vorlage) + aktueller Durchlauf-Wert.
 	variables_out: List[Dict[str, Any]] = []
+	variable_assignments: List[Dict[str, Any]] = []
 	supports_druck_schwarz_weiss = False
 	if doc.vorlage:
 		template_doc = frappe.get_cached_doc("Serienbrief Vorlage", doc.vorlage)
@@ -4212,6 +4213,23 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 					"desc": v["description"],
 					"default": dv.get("value") if dv.get("value") is not None else "",
 					"value": gv.get("value") if gv.get("value") is not None else "",
+				}
+			)
+		known_keys = {item["name"] for item in variables_out}
+		for assignment in template_doc.get("variablenbelegungen") or []:
+			label = cstr(getattr(assignment, "bezeichnung", "") or "").strip()
+			if not label:
+				continue
+			parsed = _parse_variable_values(getattr(assignment, "werte", None))
+			variable_assignments.append(
+				{
+					"label": label,
+					"is_default": bool(cint(getattr(assignment, "ist_standard", 0))),
+					"values": {
+						key: entry.get("value")
+						for key, entry in parsed.items()
+						if key in known_keys and entry.get("value") is not None
+					},
 				}
 			)
 
@@ -4239,6 +4257,7 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 		"can_submit": bool(frappe.has_permission("Serienbrief Durchlauf", "submit", doc))
 		and int(getattr(doc, "docstatus", 0) or 0) == 0,
 		"variables": variables_out,
+		"variable_assignments": variable_assignments,
 		"per_recipient_overrides": overrides_out,
 		"recipients": recipients,
 		"counts": counts,
@@ -4423,6 +4442,22 @@ def create_durchlauf(
 			"status": "Entwurf",
 		}
 	)
+	template_doc = frappe.get_doc("Serienbrief Vorlage", vorlage)
+	default_assignment = next(
+		(
+			row for row in (template_doc.get("variablenbelegungen") or [])
+			if cint(getattr(row, "ist_standard", 0))
+		),
+		None,
+	)
+	if default_assignment:
+		default_values = _parse_variable_values(getattr(default_assignment, "werte", None))
+		run_values = {
+			key: {"value": entry.get("value")}
+			for key, entry in default_values.items()
+			if "value" in entry and entry.get("value") not in (None, "")
+		}
+		doc.variablen_werte = json.dumps(run_values, ensure_ascii=False) if run_values else ""
 	doc.insert()
 	return {"docname": doc.name}
 
