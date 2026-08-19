@@ -9,6 +9,39 @@ from mail_merge.mail_merge.doctype.serienbrief_vorlage import serienbrief_vorlag
 
 
 class TestSerienbriefVorlage(unittest.TestCase):
+	def test_split_preview_profile_resolves_nested_document_nodes(self):
+		from mail_merge.mail_merge.doctype.serienbrief_durchlauf.serienbrief_durchlauf import (
+			_resolve_value_path,
+		)
+
+		template = frappe._dict(
+			name="VORSCHAU-BANKVERBINDUNG",
+			haupt_verteil_objekt="Mietvertrag",
+		)
+		profile_tree = {
+			"doctype": "Mietvertrag",
+			"wohnung": {
+				"doctype": "Wohnung",
+				"immobilie": {
+					"doctype": "Immobilie",
+					"name": "PREVIEW-IMMOBILIE-001",
+					"iban": "DE02120300000000202051",
+				},
+			},
+		}
+
+		with patch.object(
+			serienbrief_vorlage,
+			"_load_preview_profile_values",
+			return_value=(profile_tree, {}),
+		):
+			context = serienbrief_vorlage._split_preview_context(template_doc=template)
+
+		immobilie = _resolve_value_path("objekt.wohnung.immobilie", context)
+
+		self.assertIsInstance(immobilie, serienbrief_vorlage.SplitPreviewNode)
+		self.assertEqual(immobilie.iban, "DE02120300000000202051")
+
 	def test_split_preview_uses_durchlauf_pipeline_and_publishes_inline_outputs(self):
 		from mail_merge.mail_merge.doctype.serienbrief_durchlauf.serienbrief_durchlauf import (
 			SerienbriefDurchlauf,

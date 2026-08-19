@@ -2778,7 +2778,16 @@ def _dig_attr(source: Any, key: str) -> Any:
 			return source[idx]
 		return None
 
-	path_resolver = getattr(source, "resolve_serienbrief_path_segment", None)
+	# Preview-Mocks beantworten unbekannte Attribute absichtlich mit einem
+	# ``SplitPreviewUndefined``. Ein normales ``getattr`` würde dieses callable
+	# Stand-in fälschlich als echte Resolver-Methode erkennen und schon beim
+	# ersten verschachtelten Pfadsegment aufrufen. Die optionale Hook-Methode
+	# deshalb statisch auf der Klasse suchen; echte Instanz-Overrides (z. B. auf
+	# ``frappe._dict`` in Tests) bleiben über ``source.__dict__`` unterstützt.
+	try:
+		path_resolver = object.__getattribute__(source, "resolve_serienbrief_path_segment")
+	except (AttributeError, TypeError):
+		path_resolver = None
 	if callable(path_resolver):
 		resolved = path_resolver(key)
 		if resolved is not None:
