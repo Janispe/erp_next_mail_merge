@@ -363,7 +363,7 @@ const ListHeader = ({ sort, onSortClick, allSelected, someSelected, onSelectAll,
   );
 };
 
-const BulkBar = ({ count, onClear, onMove, onCopy, onDelete, onDurchlauf }) => {
+const BulkBar = ({ count, deleting, onClear, onMove, onCopy, onDelete, onDurchlauf }) => {
   if (count === 0) return null;
   return (
     <div className="bw-bulk-bar">
@@ -376,7 +376,7 @@ const BulkBar = ({ count, onClear, onMove, onCopy, onDelete, onDurchlauf }) => {
         <button className="btn sm" onClick={onDurchlauf}><Icon name="send" size={12}/> Durchlauf</button>
         <button className="btn sm" onClick={onMove}><Icon name="folder" size={12}/> Verschieben</button>
         <button className="btn sm" onClick={onCopy}><Icon name="copy" size={12}/> Kopieren</button>
-        <button className="btn sm" style={{ color: "var(--danger)" }} onClick={onDelete}><Icon name="x" size={12}/> Löschen</button>
+        <button className="btn sm" style={{ color: "var(--danger)" }} onClick={onDelete} disabled={deleting}><Icon name="x" size={12}/> {deleting ? "Löscht …" : "Löschen"}</button>
       </div>
     </div>
   );
@@ -949,6 +949,8 @@ export const App = () => {
   const [contextMenu, setContextMenu] = useState(null);
   const [counts, setCounts] = useState({});
   const [moveCopyModal, setMoveCopyModal] = useState(null); // { mode: 'move'|'copy', items: [...] }
+  const [deleting, setDeleting] = useState(false);
+  const deleteInProgress = useRef(false);
 
   // --- Aktionen (Backend + optimistisches State-Update) -------------------
   // Verschieben in einen Ordner. Wurzel ("") ist kein gültiges Ziel, da die
@@ -1191,6 +1193,39 @@ export const App = () => {
     setMoveCopyModal({ mode: "copy", items });
   };
 
+  const deleteSelectedTemplates = async () => {
+    if (deleteInProgress.current) return;
+    const items = templates.filter(t => selectedIds.has(t.id));
+    if (!items.length) return;
+    const question = items.length === 1
+      ? `Vorlage „${items[0].title}" wirklich löschen?`
+      : `${items.length} ausgewählte Vorlagen wirklich löschen?\n\n${items.map(t => t.title).join("\n")}`;
+    if (!window.confirm(question)) return;
+
+    deleteInProgress.current = true;
+    setDeleting(true);
+    const deleted = new Set();
+    const errors = [];
+    try {
+      for (const item of items) {
+        try {
+          await deleteTemplate(item.id);
+          deleted.add(item.id);
+        } catch (e) {
+          errors.push(`„${item.title}": ${e?.message || "Löschen fehlgeschlagen."}`);
+        }
+      }
+      setTemplates(prev => prev.filter(t => !deleted.has(t.id)));
+      setSelectedIds(prev => new Set([...prev].filter(id => !deleted.has(id))));
+      setPreviewId(prev => deleted.has(prev) ? null : prev);
+      if (errors.length) window.alert(`Nicht gelöscht:\n\n${errors.join("\n\n")}`);
+      reload();
+    } finally {
+      deleteInProgress.current = false;
+      setDeleting(false);
+    }
+  };
+
   const handleMoveCopyConfirm = ({ targetFolder, newTitle }) => {
     const { mode, items } = moveCopyModal;
     if (mode === "move") {
@@ -1288,10 +1323,11 @@ export const App = () => {
 
         <BulkBar
           count={selectedIds.size}
+          deleting={deleting}
           onClear={() => setSelectedIds(new Set())}
           onMove={openBulkMove}
           onCopy={openBulkCopy}
-          onDelete={() => console.log("Bulk-Löschen")}
+          onDelete={deleteSelectedTemplates}
           onDurchlauf={() => {
             const first = visibleTemplates.find(t => selectedIds.has(t.id));
             if (first) startDurchlauf(first);
