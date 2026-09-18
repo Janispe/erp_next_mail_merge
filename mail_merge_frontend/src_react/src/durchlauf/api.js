@@ -175,11 +175,10 @@ export async function availableRecipients(query) {
 }
 
 // Sammel-PDF aus den bereits generierten Dokumenten. → { file_url }.
-export async function mergedPdf({ druckSchwarzWeiss = false } = {}) {
+export async function mergedPdf() {
 	if (!embedded) return { file_url: "" };
 	return await rpc("merged_pdf", {
 		docname: getDocname(),
-		druck_schwarz_weiss: druckSchwarzWeiss ? 1 : 0,
 	});
 }
 

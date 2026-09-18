@@ -627,19 +627,45 @@ class SerienbriefDurchlauf(Document):
 		recreate_documents: bool = False,
 		druck_schwarz_weiss: bool = False,
 	) -> str:
+		if cint(self.docstatus) == 1 and not recreate_documents:
+			return self.generate_saved_pdf_file()
+		_require_draft_regeneration(self)
 		self._druck_schwarz_weiss = bool(druck_schwarz_weiss)
-		submit_docs = bool(int(getattr(self, "docstatus", 0) or 0))
 		# Drafts: immer neu rendern, sonst werden Variablen-Änderungen aus dem
 		# Formular nicht berücksichtigt und ein veralteter gespeicherter PDF-Cache
 		# der Serienbrief Dokumente landet im Merge.
-		recreate = bool(recreate_documents) or not submit_docs
 		dokumente = self._ensure_dokumente(
-			recreate=recreate,
-			submit=submit_docs,
+			recreate=True,
+			submit=False,
 			strict_variables=True,
 		)
 		pdf_bytes = self._build_merged_pdf(dokumente, print_format=print_format)
 		return self._store_pdf(pdf_bytes)
+
+	def generate_saved_pdf_file(self) -> str:
+		"""Download the saved result without rendering or changing document snapshots."""
+		from frappe.utils.file_manager import save_file
+
+		self.check_permission("read")
+		if cint(self.docstatus) == 2:
+			frappe.throw(_("Der Durchlauf wurde storniert."))
+		if cstr(self.get("status") or "") == "Läuft":
+			frappe.throw(_("Der Durchlauf läuft gerade. Bitte warten Sie, bis der Lauf abgeschlossen ist."))
+		dokumente = frappe.get_all(
+			"Serienbrief Dokument",
+			filters={"durchlauf": self.name, "recreate_pending": 0, "docstatus": ["<", 2]},
+			order_by="creation asc, name asc",
+			pluck="name",
+		)
+		pdf_bytes = self._build_merged_pdf(dokumente, saved_only=True)
+		file_doc = save_file(
+			f"{_scrub_value(self.title or 'serienbrief')}-{self.name}.pdf",
+			pdf_bytes,
+			self.doctype,
+			self.name,
+			is_private=1,
+		)
+		return file_doc.file_url
 
 	def generate_html_file(self) -> str:
 		# Für Debug/Entwicklung weiterhin das gesamte HTML (alle Seiten) erzeugen.
@@ -857,12 +883,14 @@ class SerienbriefDurchlauf(Document):
 		self._last_run_counts = {"total": total, **counts}
 		return created
 
-	def _build_merged_pdf(self, dokumente: list[str], print_format: str | None = None) -> bytes:
+	def _build_merged_pdf(
+		self, dokumente: list[str], print_format: str | None = None, *, saved_only: bool = False
+	) -> bytes:
 		if not dokumente:
 			frappe.throw(_("Keine Serienbrief Dokumente zum Drucken."))
 
 		format_name = cstr(print_format or "Serienbrief Dokument").strip() or "Serienbrief Dokument"
-		use_print_format = frappe.db.exists("Print Format", format_name)
+		use_print_format = not saved_only and frappe.db.exists("Print Format", format_name)
 
 		merger = PdfMerger()
 		appended = 0
@@ -873,6 +901,18 @@ class SerienbriefDurchlauf(Document):
 				if cstr(getattr(doc, "status", "") or "") in ("Fehler", "Übersprungen"):
 					continue
 				has_pdf = cstr(getattr(doc, "generated_pdf_file", None) or "").strip()
+				if saved_only:
+					if not has_pdf:
+						frappe.throw(
+							_(
+								"Für Serienbrief Dokument {0} fehlt das gespeicherte PDF. "
+								"Der gespeicherte Briefstand kann nicht heruntergeladen werden."
+							).format(doc.name)
+						)
+					pdf_bytes = read_file_url_bytes(doc.generated_pdf_file)
+					merger.append(BytesIO(pdf_bytes))
+					appended += 1
+					continue
 				if not use_print_format and not has_pdf and not cstr(getattr(doc, "html", "") or "").strip():
 					continue
 				if use_print_format:
@@ -3884,6 +3924,23 @@ def get_serienbrief_assignments(
 	}
 
 
+def _require_draft_regeneration(doc) -> None:
+	if not frappe.has_permission("Serienbrief Durchlauf", "write", doc):
+		raise frappe.PermissionError
+	if cint(doc.docstatus) != 0:
+		frappe.throw(_("Nur Entwürfe können neu erzeugt werden. Der gespeicherte Briefstand bleibt erhalten."))
+	if cstr(doc.get("status") or "") == "Läuft":
+		frappe.throw(_("Der Durchlauf läuft gerade. Bitte warten Sie, bis der Lauf abgeschlossen ist."))
+
+
+def _completed_run_status(counts) -> str:
+	# Übersprungene Empfänger sind kein Fehler; ein Lauf ohne ein einziges
+	# erfolgreiches Dokument, aber mit Renderfehlern, ist fehlgeschlagen.
+	if counts and counts.get("error", 0) and not counts.get("generated", 0):
+		return "Fehlgeschlagen"
+	return "Generiert"
+
+
 @frappe.whitelist()
 def generate_pdf(
 	docname: str,
@@ -3923,22 +3980,24 @@ def submit_durchlauf(docname: str, druck_schwarz_weiss: int | str = 0) -> Dict[s
 	doc._druck_schwarz_weiss = bool(cint(druck_schwarz_weiss or 0))
 	doc.submit()
 	counts = getattr(doc, "_last_run_counts", None)
-	update_values: Dict[str, Any] = {"status": "Generiert", "last_run_on": now_datetime()}
+	status = _completed_run_status(counts)
+	update_values: Dict[str, Any] = {"status": status, "last_run_on": now_datetime()}
 	if counts:
 		update_values["run_summary"] = json.dumps(counts)
 		update_values["progress"] = f"{counts.get('total', 0)}/{counts.get('total', 0)}"
 	frappe.db.set_value("Serienbrief Durchlauf", docname, update_values, update_modified=False)
 	frappe.db.commit()
-	return {"docname": docname, "docstatus": 1, "status": "Generiert", "counts": counts or {}}
+	return {"docname": docname, "docstatus": 1, "status": status, "counts": counts or {}}
 
 
 @frappe.whitelist()
 def regenerate_dokumente(docname: str, submit_documents: int | str = 0) -> list[str]:
 	durchlauf = frappe.get_doc("Serienbrief Durchlauf", docname)
-	if not frappe.has_permission("Serienbrief Durchlauf", "write", durchlauf):
-		raise frappe.PermissionError
+	_require_draft_regeneration(durchlauf)
 
 	submit_flag = bool(int(submit_documents or 0))
+	if submit_flag and not frappe.has_permission("Serienbrief Durchlauf", "submit", durchlauf):
+		raise frappe.PermissionError
 	return durchlauf._ensure_dokumente(recreate=True, submit=submit_flag)
 
 
@@ -3981,7 +4040,8 @@ _RUN_COUNT_KEYS = {"Generiert": "generated", "Übersprungen": "skipped", "Fehler
 def _run_durchlauf_job(docname: str, druck_schwarz_weiss: int | str = 0) -> None:
 	"""Enqueued: rendert alle Objekt, schreibt Pro-Objekt-Status + Fortschritt,
 	setzt den Lauf-Status. Fehler einzelner Objekt brechen den Lauf NICHT ab
-	(das macht _create_dokumente); nur ein unerwarteter Infra-Fehler → Fehlgeschlagen."""
+	(das macht _create_dokumente). Ohne erfolgreiche Dokumente bei Renderfehlern
+	oder bei einem unerwarteten Infra-Fehler wird der Lauf als fehlgeschlagen markiert."""
 	doc = frappe.get_doc("Serienbrief Durchlauf", docname)
 	doc._druck_schwarz_weiss = bool(cint(druck_schwarz_weiss or 0))
 	total = len(doc.get("iteration_objekte") or [])
@@ -4000,7 +4060,7 @@ def _run_durchlauf_job(docname: str, druck_schwarz_weiss: int | str = 0) -> None
 			"Serienbrief Durchlauf",
 			docname,
 			{
-				"status": "Generiert",
+				"status": _completed_run_status(counts),
 				"progress": f"{done}/{done}",
 				"run_summary": json.dumps(counts),
 				"last_run_on": now_datetime(),
@@ -4411,15 +4471,15 @@ def get_available_recipients(docname: str, query: str | None = None, limit: int 
 
 @frappe.whitelist()
 def get_merged_pdf(docname: str, druck_schwarz_weiss: int | str = 0) -> Dict[str, str]:
-	"""Sammel-PDF im gewählten Druckmodus erzeugen."""
+	"""Gespeicherte PDFs zusammenführen; der Druckmodus wird beim Rendern festgelegt.
+
+	``druck_schwarz_weiss`` bleibt für ältere Clients im API-Vertrag, ändert
+	beim Download aber keinen bereits erzeugten Briefstand.
+	"""
 	doc = frappe.get_doc("Serienbrief Durchlauf", docname)
 	if not frappe.has_permission("Serienbrief Durchlauf", "read", doc):
 		raise frappe.PermissionError
-	file_url = doc.generate_pdf_file(
-		print_format="Serienbrief Dokument",
-		recreate_documents=True,
-		druck_schwarz_weiss=bool(cint(druck_schwarz_weiss or 0)),
-	)
+	file_url = doc.generate_saved_pdf_file()
 	return {"file_url": file_url}
 
 

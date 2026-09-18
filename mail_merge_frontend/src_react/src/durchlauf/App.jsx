@@ -67,7 +67,7 @@ const Header = ({
             className={`dl-print-option ${!supportsDruckSchwarzWeiss ? "disabled" : ""}`}
             title={
               supportsDruckSchwarzWeiss
-                ? "Rendert unterstützte Briefköpfe mit drucksparender Schwarz-Weiß-Variante"
+                ? "Gilt beim Starten und Einreichen des Laufs. Downloads verwenden die gespeicherten PDFs."
                 : "Diese Vorlage enthält keinen drucksparenden Kopfbereich"
             }
           >
@@ -75,7 +75,7 @@ const Header = ({
               type="checkbox"
               checked={supportsDruckSchwarzWeiss && druckSchwarzWeiss}
               onChange={e => onDruckSchwarzWeissChange && onDruckSchwarzWeissChange(e.target.checked)}
-              disabled={running || busy || !supportsDruckSchwarzWeiss}
+              disabled={running || busy || !durchlauf.can_write || !supportsDruckSchwarzWeiss}
             />
             <span>Drucksparend / Schwarz-Weiß</span>
           </label>
@@ -100,7 +100,7 @@ const Header = ({
               <Icon name="x" size={13}/> Als fehlgeschlagen markieren
             </button>
           )}
-          <button className="btn" onClick={onMergedPdf} disabled={running || busy || stats.generated === 0}>
+          <button className="btn" onClick={onMergedPdf} disabled={running || busy || stats.generated === 0} title="Gespeicherte Einzel-PDFs herunterladen; es werden keine Briefe neu erzeugt">
             <Icon name="download" size={13}/> Sammel-PDF
           </button>
           <button className="btn" disabled title="E-Mail-Versand kommt in Phase 2">
@@ -864,9 +864,7 @@ const DurchlaufApp = () => {
   const onMergedPdf = useCallback(async () => {
     setBusy(true);
     try {
-      const res = await mergedPdf({
-        druckSchwarzWeiss: durchlauf.supports_druck_schwarz_weiss && druckSchwarzWeiss,
-      });
+      const res = await mergedPdf();
       if (res && res.file_url) window.open(res.file_url, "_blank");
       await refresh();
     } catch (e) {
@@ -874,7 +872,7 @@ const DurchlaufApp = () => {
     } finally {
       setBusy(false);
     }
-  }, [druckSchwarzWeiss, refresh, durchlauf.supports_druck_schwarz_weiss]);
+  }, [refresh]);
 
   const onSubmit = useCallback(async () => {
     if (running || !durchlauf.can_submit) return;
