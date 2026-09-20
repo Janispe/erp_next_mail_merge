@@ -1,5 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { Icon } from "../components/Icon.jsx";
+import { VariableEditor, VariableValues } from "./VariableEditor.jsx";
+import { ResizableColumns } from "./ResizableColumns.jsx";
+import { LetterComposer } from "./LetterComposer.jsx";
 import {
   embedded,
   loadDurchlauf,
@@ -14,9 +17,12 @@ import {
   mergedPdf,
   isNewMode,
   getVorlageParam,
+  getDocname,
   listVorlagen,
   createDurchlauf,
   updateTitle,
+  openTemplate,
+  changeTemplate,
   gotoDurchlauf,
   gotoNew,
 } from "./api.js";
@@ -111,7 +117,6 @@ const Header = ({
       <div className="dl-header-meta">
         <span className="dl-header-meta-item"><Icon name="tag" size={11}/> Vorlage: <strong>{durchlauf.vorlage.title}</strong></span>
         <span className="dl-header-meta-item"><Icon name="repeat" size={11}/> Iteration: <strong>{durchlauf.iteration_doctype}</strong></span>
-        <span className="dl-header-meta-item"><Icon name="calendar" size={11}/> Datum: <strong>{new Date(durchlauf.date).toLocaleDateString("de-DE")}</strong></span>
         <span className="dl-header-meta-item"><Icon name="user" size={11}/> Erstellt von: <strong>{durchlauf.created_by.split("@")[0]}</strong></span>
       </div>
       <div className="dl-stats">
@@ -151,7 +156,28 @@ const Header = ({
 };
 
 // ============== Config column ==============
-const ConfigColumn = ({ durchlauf, onUpdateVar, onApplyAssignment }) => {
+const ConfigColumn = ({ onOpenTemplate, onChangeTemplate, durchlauf, onUpdateVar, onApplyAssignment, recipient, overrides, onSetOverride, onResetOverride, disabled }) => {
+  const [scope, setScope] = useState("all");
+  const [choosing, setChoosing] = useState(false);
+  const [templateQuery, setTemplateQuery] = useState("");
+  const [templates, setTemplates] = useState([]);
+  const [selectedTemplate, setSelectedTemplate] = useState("");
+  const [templateError, setTemplateError] = useState("");
+  useEffect(() => {
+    if (!choosing) return;
+    let active = true;
+    listVorlagen(templateQuery, durchlauf.vorlage.id).then(r => {
+      if (active) { setTemplates(r.items || []); setTemplateError(""); }
+    }).catch(e => { if (active) setTemplateError(e.message); });
+    return () => { active = false; };
+  }, [choosing, templateQuery, durchlauf.vorlage.id]);
+  const open = async () => {
+    setTemplateError("");
+    try { await onOpenTemplate(); }
+    catch(e) { setTemplateError(e.message); }
+  };
+  const choose = async () => { try { await onChangeTemplate(selectedTemplate); setChoosing(false); setTemplateError(""); } catch(e) { setTemplateError(e.message); } };
+  const individual = scope === "recipient" && !!recipient;
   const [selectedAssignment, setSelectedAssignment] = useState("");
   const assignments = durchlauf.variable_assignments || [];
   const applyAssignment = (label) => {
@@ -172,45 +198,50 @@ const ConfigColumn = ({ durchlauf, onUpdateVar, onApplyAssignment }) => {
             </div>
           </div>
           <div className="dl-template-actions">
-            <button className="btn sm"><Icon name="edit" size={11}/> Öffnen</button>
-            <button className="btn sm ghost">Wechseln…</button>
+            <button className="btn sm" onClick={open}><Icon name="edit" size={11}/> Öffnen</button>
+            <button className="btn sm ghost" disabled={disabled || durchlauf.docstatus !== 0} onClick={() => { setSelectedTemplate(durchlauf.vorlage.id || ""); setChoosing(true); }}>Wechseln…</button>
           </div>
         </div>
       </div>
 
-      <div className="dl-section">
-        <div className="dl-section-title">Konfiguration</div>
+      <details className="dl-section dl-run-config">
+        <summary className="dl-section-title">Konfiguration des Durchlaufs</summary><p className="dl-assignment-hint">Kontextwerte und Vorlagenvariablen werden unten gemeinsam oder je Empfänger bearbeitet.</p>
         <div className="dl-config-field">
           <label className="dl-config-label">Iterations-Doctype</label>
-          <select className="dl-config-select" defaultValue={durchlauf.iteration_doctype}>
-            <option>Zielobjekt</option>
-            <option>BK Person</option>
-            <option>Kontakt</option>
-          </select>
+          <input className="dl-config-input" value={durchlauf.iteration_doctype || ""} readOnly/>
         </div>
-        <div className="dl-config-field">
-          <label className="dl-config-label">Datum</label>
-          <input className="dl-config-input" type="date" defaultValue={durchlauf.date}/>
-        </div>
+
         <div className="dl-config-field">
           <label className="dl-config-label">Kategorie</label>
-          <input className="dl-config-input" defaultValue={durchlauf.vorlage.kategorie}/>
+          <input className="dl-config-input" value={durchlauf.vorlage.kategorie || ""} readOnly/>
         </div>
-      </div>
+      </details>
+
+      {templateError && <p role="alert" className="dl-save-error">{templateError}</p>}
+      {choosing && <div className="dl-section">
+        <label>Vorlage suchen<input className="dl-config-input" value={templateQuery} onChange={e => setTemplateQuery(e.target.value)}/></label>
+        <label>Neue Vorlage<select className="dl-config-input" value={selectedTemplate} onChange={e => setSelectedTemplate(e.target.value)}>
+          <option value="">Bitte wählen</option>
+          {templates.map(t => <option key={t.id} value={t.id}>{t.title} · {t.haupt_verteil_objekt}</option>)}
+        </select></label>
+        <p className="dl-var-desc">Empfänger und Eingaben bleiben erhalten. Vorhandene PDFs behalten ihren bisherigen Stand, bis Sie neu rendern.</p>
+        <button className="btn sm" disabled={disabled || !selectedTemplate} onClick={choose}>Übernehmen</button>
+        <button className="btn sm ghost" disabled={disabled} onClick={() => setChoosing(false)}>Abbrechen</button>
+      </div>}
 
       <div className="dl-section">
         <div className="dl-section-title">
-          Vorlagen-Variablen
-          <button title="Variable hinzufügen"><Icon name="plus" size={11}/></button>
+          Variablen & Kontextwerte
+
         </div>
-        {assignments.length > 0 && (
+        {!individual && assignments.length > 0 && (
           <div className="dl-config-field dl-assignment-field">
             <label className="dl-config-label">Gespeicherte Belegung</label>
             <select
               className="dl-config-select"
               value={selectedAssignment}
               onChange={(event) => applyAssignment(event.target.value)}
-              disabled={!durchlauf.can_write}
+              disabled={disabled}
             >
               <option value="">Belegung wählen…</option>
               {assignments.map((item) => (
@@ -222,25 +253,15 @@ const ConfigColumn = ({ durchlauf, onUpdateVar, onApplyAssignment }) => {
             <div className="dl-assignment-hint">Die Werte werden in diesen Durchlauf kopiert.</div>
           </div>
         )}
-        <div className="dl-vars">
-          {durchlauf.variables.map((v, i) => (
-            <div key={i} className="dl-var">
-              <div className="dl-var-head">
-                <span className="dl-var-name">{v.name}</span>
-                <span className="dl-var-type">{v.type}</span>
-                {v.default && <span className="dl-var-default">⌥ {v.default}</span>}
-              </div>
-              {v.desc && <div className="dl-var-desc">{v.desc}</div>}
-              <input
-                className="dl-var-input"
-                type={v.type === "Datum" ? "date" : "text"}
-                value={v.value ?? ""}
-                onChange={e => onUpdateVar(v.name, e.target.value)}
-                disabled={!durchlauf.can_write}
-              />
-            </div>
-          ))}
-        </div>
+        <label className="dl-variable-scope">Werte bearbeiten für
+          <select value={individual ? "recipient" : "all"} onChange={e => setScope(e.target.value)}>
+            <option value="all">Alle Empfänger gemeinsam</option>
+            <option value="recipient" disabled={!recipient}>Ausgewählter Empfänger</option>
+          </select>
+        </label>
+        <div className="dl-scope-explanation">{individual ? <><strong>{recipient.customer || recipient.id}</strong><small>{recipient.id}</small>Änderungen gelten nur für diesen Empfänger.</> : "Gemeinsame Werte gelten für alle Empfänger ohne eigenen Wert."}</div>
+        <VariableEditor variables={durchlauf.variables} resolvedValues={recipient?.resolved_values} overrides={overrides} individual={individual} disabled={disabled} onChange={individual ? onSetOverride : onUpdateVar} onReset={onResetOverride}/>
+
       </div>
     </aside>
   );
@@ -492,7 +513,7 @@ const AddRecipientDialog = ({ open, doctype, selected, busy, onClose, onConfirm 
 };
 
 // ============== Detail (right) ==============
-const DetailPane = ({ r, durchlauf, overrides, onSetOverride, onClearOverrides, overrideCounts, onDownloadPdf, onRun, running }) => {
+const DetailPane = ({ r, durchlauf, overrides, overrideCounts, onDownloadPdf, onRun, running }) => {
   const [tab, setTab] = useState("preview");
 
   if (!r) {
@@ -586,83 +607,9 @@ const DetailPane = ({ r, durchlauf, overrides, onSetOverride, onClearOverrides, 
         {tab === "vars" && (
           <div className="dl-vars-list">
             <div className="dl-vars-section">
-              <div className="dl-vars-section-head">
-                <span className="dl-vars-section-title">Vorlagen-Variablen <span className="dl-vars-section-sub">(pro Zielobjekt überschreibbar)</span></span>
-                {Object.keys(overrides).length > 0 && (
-                  <button className="dl-vars-reset" onClick={onClearOverrides}>
-                    <Icon name="refresh" size={11}/> Auf Durchlauf-Default zurück
-                  </button>
-                )}
-              </div>
-              <div className="dl-vars">
-                {durchlauf.variables.map((v, i) => {
-                  const overridden = overrides[v.name] !== undefined;
-                  const effective = overridden ? overrides[v.name] : v.value;
-                  return (
-                    <div key={i} className={`dl-var dl-var-editable ${overridden ? "dl-var-overridden" : ""}`}>
-                      <div className="dl-var-head">
-                        <span className="dl-var-name">{v.name}</span>
-                        <span className="dl-var-type">{v.type}</span>
-                        {overridden ? (
-                          <span className="dl-var-badge">↻ Override</span>
-                        ) : (
-                          <span className="dl-var-default">⌥ {v.value}</span>
-                        )}
-                      </div>
-                      {v.desc && <div className="dl-var-desc">{v.desc}</div>}
-                      <div className="dl-var-input-row">
-                        <input
-                          className="dl-var-input"
-                          type={v.type === "Datum" ? "date" : "text"}
-                          value={effective}
-                          onChange={e => onSetOverride(v.name, e.target.value)}
-                        />
-                        {overridden && (
-                          <button
-                            className="dl-var-input-reset"
-                            onClick={() => onSetOverride(v.name, v.value)}
-                            title={`Zurück auf Durchlauf-Default „${v.value}"`}
-                          >
-                            <Icon name="x" size={11}/>
-                          </button>
-                        )}
-                      </div>
-                      {overridden && (
-                        <div className="dl-var-override-hint">
-                          <Icon name="branch" size={10}/>
-                          Durchlauf-Default: <code>{v.value}</code>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="dl-vars-section">
-              <div className="dl-vars-section-head">
-                <span className="dl-vars-section-title">Aufgelöste Kontextwerte <span className="dl-vars-section-sub">(read-only, aus Datenbank)</span></span>
-              </div>
-              <div className="dl-vars">
-                <div className="dl-var">
-                  <div className="dl-var-head"><span className="dl-var-name">{`{{ person.nachname }}`}</span><span className="dl-var-type">String</span></div>
-                  <div className="dl-var-readonly">{r.customer.split(",")[0]}</div>
-                </div>
-                <div className="dl-var">
-                  <div className="dl-var-head"><span className="dl-var-name">{`{{ offener_betrag }}`}</span><span className="dl-var-type">Currency</span></div>
-                  <div className="dl-var-readonly">{r.offener_betrag}</div>
-                </div>
-                <div className="dl-var">
-                  <div className="dl-var-head"><span className="dl-var-name">{`{{ statuscode }}`}</span><span className="dl-var-type">Int</span></div>
-                  <div className="dl-var-readonly">{r.statuscode}</div>
-                </div>
-                <div className="dl-var">
-                  <div className="dl-var-head"><span className="dl-var-name">{`{{ zahlungskonto.iban }}`}</span><span className="dl-var-type">Data</span></div>
-                  <div className={`dl-var-readonly ${r.missing_vars?.includes("zahlungskonto.iban") ? "dl-var-missing" : ""}`}>
-                    {r.missing_vars?.includes("zahlungskonto.iban") ? "— leer —" : "DE89 3704 0044 0532 0130 00"}
-                  </div>
-                </div>
-              </div>
+              <div className="dl-vars-section-head"><span className="dl-vars-section-title">Aktuelle Werte für diesen Empfänger</span></div>
+              <p className="dl-var-desc">Bearbeiten Sie die Werte links unter „Variablen & Kontextwerte“. Diese Ansicht zeigt die aktuellen Eingaben; das gespeicherte PDF kann einen älteren Stand enthalten.</p>
+              <VariableValues variables={durchlauf.variables} resolvedValues={r.resolved_values} overrides={overrides}/>
             </div>
           </div>
         )}
@@ -718,12 +665,16 @@ const DurchlaufApp = () => {
   const [busy, setBusy] = useState(false);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [druckSchwarzWeiss, setDruckSchwarzWeiss] = useState(false);
+  const [inputsChanged, setInputsChanged] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const saveChain = useRef(Promise.resolve());
 
   const durchlauf = { ...durchlaufMeta, variables: vars };
 
   // --- Laden ---------------------------------------------------------------
   const applyData = useCallback((d) => {
     setDurchlaufMeta(d.durchlauf);
+    setInputsChanged(false);
     setRecipients(d.recipients || []);
     setVars(d.durchlauf.variables || []);
     setPerRecipientOverrides(d.overrides || {});
@@ -752,12 +703,14 @@ const DurchlaufApp = () => {
   // --- Variablen speichern (debounced) ------------------------------------
   const saveTimer = useRef(null);
   const persistVariables = useCallback((nextVars, nextOverrides) => {
-    return saveVariables(
-      (nextVars || []).map((v) => ({ name: v.name, value: v.value })),
-      nextOverrides || {},
-    );
+    const task = saveChain.current.catch(() => {}).then(() => saveVariables(
+      (nextVars || []).filter(v => v.value != null).map((v) => ({ name: v.name, value: v.value })), nextOverrides || {},
+    ));
+    saveChain.current = task;
+    return task.then(result => { setSaveError(""); return result; }).catch(e => { setSaveError(e.message || "Angaben konnten nicht gespeichert werden."); throw e; });
   }, []);
   const scheduleSave = useCallback((nextVars, nextOverrides) => {
+    setInputsChanged(true);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       persistVariables(nextVars, nextOverrides).catch(() => {});
@@ -795,8 +748,7 @@ const DurchlaufApp = () => {
     setPerRecipientOverrides(prev => {
       const next = { ...prev };
       const cur = { ...(next[recipientId] || {}) };
-      const defaultVal = vars.find(v => v.name === varName)?.value;
-      if (value === "" || value === defaultVal) {
+      if (value === undefined) {
         delete cur[varName];
       } else {
         cur[varName] = value;
@@ -846,10 +798,13 @@ const DurchlaufApp = () => {
     return stopPolling;
   }, [running, poll]);
 
+  useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current); }, []);
+
   const onRun = useCallback(async () => {
     if (running) return;
     setBusy(true);
     try {
+      await flushVariableSave();
       await startRun({ druckSchwarzWeiss: durchlauf.supports_druck_schwarz_weiss && druckSchwarzWeiss });
       setRunning(true);
       setProgress("");
@@ -859,11 +814,12 @@ const DurchlaufApp = () => {
     } finally {
       setBusy(false);
     }
-  }, [running, poll, druckSchwarzWeiss, durchlauf.supports_druck_schwarz_weiss]);
+  }, [running, poll, druckSchwarzWeiss, durchlauf.supports_druck_schwarz_weiss, flushVariableSave]);
 
   const onMergedPdf = useCallback(async () => {
     setBusy(true);
     try {
+      if (inputsChanged && durchlauf.can_write) await flushVariableSave();
       const res = await mergedPdf();
       if (res && res.file_url) window.open(res.file_url, "_blank");
       await refresh();
@@ -872,7 +828,7 @@ const DurchlaufApp = () => {
     } finally {
       setBusy(false);
     }
-  }, [refresh]);
+  }, [refresh, inputsChanged, durchlauf.can_write, flushVariableSave]);
 
   const onSubmit = useCallback(async () => {
     if (running || !durchlauf.can_submit) return;
@@ -937,6 +893,7 @@ const DurchlaufApp = () => {
     if (!ids.length) return;
     setBusy(true);
     try {
+      await flushVariableSave();
       await apiAddRecipients(ids);
       setAddDialogOpen(false);
       await refresh();
@@ -945,7 +902,7 @@ const DurchlaufApp = () => {
     } finally {
       setBusy(false);
     }
-  }, [refresh]);
+  }, [refresh, flushVariableSave]);
 
   const onBulkAction = useCallback(async (action) => {
     const ids = Array.from(selectedIds);
@@ -954,6 +911,7 @@ const DurchlaufApp = () => {
       if (!window.confirm(`${ids.length} Zielobjekt entfernen?`)) return;
       setBusy(true);
       try {
+        await flushVariableSave();
         await apiRemoveRecipients(ids);
         setSelectedIds(new Set());
         await refresh();
@@ -969,7 +927,7 @@ const DurchlaufApp = () => {
     } else if (action === "send") {
       window.alert("E-Mail-Versand kommt in Phase 2.");
     }
-  }, [selectedIds, onRun, onMergedPdf, refresh]);
+  }, [selectedIds, onRun, onMergedPdf, refresh, flushVariableSave]);
 
   const filterCounts = useMemo(() => ({
     all: recipients.length,
@@ -1047,13 +1005,27 @@ const DurchlaufApp = () => {
         progress={progress}
         busy={busy}
         druckSchwarzWeiss={druckSchwarzWeiss}
-        onDruckSchwarzWeissChange={setDruckSchwarzWeiss}
+        onDruckSchwarzWeissChange={value => { setDruckSchwarzWeiss(value); setInputsChanged(true); }}
       />
-      <div className="dl-main">
+      {saveError && <div role="alert" className="dl-save-error">{saveError} Ihre Eingaben sind noch nicht gespeichert.</div>}
+      {stats.generated > 0 && (inputsChanged || durchlauf.snapshot_state === "stale") && <div role="status" className="dl-snapshot-notice">Die gespeicherten PDFs enthalten Ihre aktuellen Änderungen noch nicht.<small>„Lauf starten / neu rendern“ übernimmt die aktuellen Angaben. Downloads liefern weiterhin den gespeicherten Stand.</small></div>}
+      {stats.generated > 0 && !inputsChanged && durchlauf.snapshot_state === "unknown" && <div className="dl-snapshot-notice">Für diesen älteren Durchlauf ist kein Vergleich mit den aktuellen Eingaben gespeichert. Downloads liefern die vorhandenen PDFs.</div>}
+      <ResizableColumns>
         <ConfigColumn
           durchlauf={durchlauf}
+          onOpenTemplate={async () => { if (durchlauf.can_write && durchlauf.docstatus === 0 && !running) await flushVariableSave(); await openTemplate(durchlauf.vorlage.id); }}
+          onChangeTemplate={async template => {
+            setBusy(true);
+            try { await flushVariableSave(); await changeTemplate(template); await refresh(); setInputsChanged(true); }
+            finally { setBusy(false); }
+          }}
           onUpdateVar={onUpdateVar}
           onApplyAssignment={applyVariableAssignment}
+          recipient={currentRecipient}
+          overrides={perRecipientOverrides[currentId] || {}}
+          onSetOverride={(name, value) => setRecipientOverride(currentId, name, value)}
+          onResetOverride={name => setRecipientOverride(currentId, name, undefined)}
+          disabled={!durchlauf.can_write || running || busy}
         />
         <RecipientsList
           recipients={filtered}
@@ -1076,20 +1048,18 @@ const DurchlaufApp = () => {
           r={currentRecipient}
           durchlauf={durchlauf}
           overrides={perRecipientOverrides[currentId] || {}}
-          onSetOverride={(name, val) => setRecipientOverride(currentId, name, val)}
-          onClearOverrides={() => clearRecipientOverrides(currentId)}
           overrideCounts={perRecipientOverrides}
           onDownloadPdf={onDownloadPdf}
           onRun={onRun}
-          running={running}
+          running={running || busy}
         />
-      </div>
+      </ResizableColumns>
     </div>
   );
 };
 
 // ============== Neuer Durchlauf (Vollbild-Page ohne docname) ==============
-const NewDurchlauf = ({ preselect }) => {
+const NewDurchlauf = ({ preselect, onBusyChange }) => {
   const [vorlagen, setVorlagen] = useState([]);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(preselect || "");
@@ -1097,6 +1067,7 @@ const NewDurchlauf = ({ preselect }) => {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const selRowRef = React.useRef(null);
+  useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
 
   useEffect(() => {
     let alive = true;
@@ -1178,10 +1149,31 @@ const NewDurchlauf = ({ preselect }) => {
   );
 };
 
-// ============== App (Wrapper: Neu-Modus vs. Viewer) ==============
+// Keep visited views mounted so switching never discards entered values.
+export const CreationViews = ({ preselect = "", initialPrototype = false }) => {
+  const [prototype, setPrototype] = useState(initialPrototype);
+  const [visited, setVisited] = useState({ classic: !initialPrototype, prototype: initialPrototype });
+  const [busy, setBusy] = useState({ classic: false, prototype: false });
+  const classicBusy = useCallback(value => setBusy(prev => ({ ...prev, classic: value })), []);
+  const prototypeBusy = useCallback(value => setBusy(prev => ({ ...prev, prototype: value })), []);
+  const changeView = next => {
+    setPrototype(next);
+    setVisited(prev => ({ ...prev, [next ? "prototype" : "classic"]: true }));
+  };
+  return <div className="dl-creation-views">
+    <div className="dl-view-switch" role="group" aria-label="Ansicht zum Anlegen">
+      <span>Brief anlegen</span>
+      <button type="button" aria-pressed={!prototype} disabled={busy.classic || busy.prototype} onClick={() => changeView(false)}>Bisherige Ansicht</button>
+      <button type="button" aria-pressed={prototype} disabled={busy.classic || busy.prototype} onClick={() => changeView(true)}>Assistent (Prototyp)</button>
+      <small>Eingaben bleiben beim Umschalten erhalten.</small>
+    </div>
+    <div hidden={prototype}>{visited.classic && <NewDurchlauf preselect={preselect} onBusyChange={classicBusy}/>}</div>
+    <div hidden={!prototype}>{visited.prototype && <LetterComposer preselect={preselect} onBusyChange={prototypeBusy}/>}</div>
+  </div>;
+};
+
 export const App = () => {
-  // Eingebettet ohne docname → „Neuer Durchlauf"; sonst der Viewer. Standalone (Mock)
-  // zeigt direkt den Viewer.
-  if (isNewMode()) return <NewDurchlauf preselect={getVorlageParam()}/>;
+  const demoPrototype = !getDocname() && new URLSearchParams(window.location.search).has("composer");
+  if (isNewMode() || demoPrototype) return <CreationViews preselect={getVorlageParam()} initialPrototype={demoPrototype}/>;
   return <DurchlaufApp/>;
 };

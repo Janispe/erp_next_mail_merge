@@ -13,6 +13,10 @@
 
 const HV_DL = "mail_merge.mail_merge.doctype.serienbrief_durchlauf.serienbrief_durchlauf.";
 const RPC_ACTIONS = {
+	composer_template: "mail_merge.mail_merge.utils.letter_composer.describe_template",
+	composer_recipients: "mail_merge.mail_merge.utils.letter_composer.search_recipients",
+	composer_preview: "mail_merge.mail_merge.utils.letter_composer.preview",
+	composer_save: "mail_merge.mail_merge.utils.letter_composer.save",
 	durchlauf_data: HV_DL + "get_durchlauf_data",
 	run_progress: HV_DL + "get_run_progress",
 	start_run: HV_DL + "start_durchlauf_run",
@@ -30,6 +34,10 @@ const RPC_ACTIONS = {
 
 // Navigations-Aktionen (kein frappe.call).
 const NAV_ACTIONS = {
+	open_editor: (params) => {
+		frappe.route_options = { hv_serienbrief_template: params.template };
+		frappe.set_route("serienbrief_editor");
+	},
 	// Nach „Neuer Durchlauf" auf die docname-Route wechseln (reload-/teilbar).
 	goto_durchlauf: (params) => frappe.set_route("serienbrief_durchlauf_viewer", params.docname),
 	// In den „Neuer Durchlauf"-Modus (Route ohne docname).

@@ -16,10 +16,10 @@ class TestSerienbriefVorlage(unittest.TestCase):
 
 		template = frappe._dict(
 			name="VORSCHAU-BANKVERBINDUNG",
-			haupt_verteil_objekt="Mietvertrag",
+			haupt_verteil_objekt="Beispieldatensatz",
 		)
 		profile_tree = {
-			"doctype": "Mietvertrag",
+			"doctype": "Beispieldatensatz",
 			"wohnung": {
 				"doctype": "Wohnung",
 				"immobilie": {
@@ -54,18 +54,18 @@ class TestSerienbriefVorlage(unittest.TestCase):
 			content_type="Textbaustein (Rich Text)",
 			text_content="Mieter",
 			render_position="Body",
-			variables=[],
+			variables=[frappe._dict(variable="count", variable_type="Text")],
 			outputs=[
 				frappe._dict(
 					output_name="anzahl",
-					value_path="serienbrief.count",
+					value_path="count",
 				)
 			],
 		)
 		template = frappe._dict(
 			name="VORSCHAU-OUTPUTS",
 			title="Vorschau Outputs",
-			haupt_verteil_objekt="Mietvertrag",
+			haupt_verteil_objekt="Beispieldatensatz",
 			content_type="Textbaustein (Rich Text)",
 			content=(
 				'{{ baustein("Zaehler") }} '
@@ -75,7 +75,7 @@ class TestSerienbriefVorlage(unittest.TestCase):
 				frappe._dict(
 					baustein="Zaehler",
 					baustein_key="anzahl",
-					pfad_zuordnung="",
+					pfad_zuordnung='{"count":"serienbrief.count"}',
 					variablen_werte="",
 				)
 			],
@@ -297,7 +297,7 @@ class TestSerienbriefVorlage(unittest.TestCase):
 	def test_version_snapshot_captures_full_editor_state(self):
 		doc = frappe._dict(
 			title="Testvorlage",
-			haupt_verteil_objekt="Mietvertrag",
+			haupt_verteil_objekt="Beispieldatensatz",
 			kategorie="Vertraege",
 			favorite=1,
 			content_type="Textbaustein (Rich Text)",
@@ -418,10 +418,10 @@ class TestSerienbriefVorlage(unittest.TestCase):
 			],
 		}
 		standard = serienbrief_vorlage._filter_placeholder_node(
-			node, "objekt", "Iterationsobjekt: Mietvertrag", 0, profile, "Standard"
+			node, "objekt", "Iterationsobjekt: Beispieldatensatz", 0, profile, "Standard"
 		)
 		advanced = serienbrief_vorlage._filter_placeholder_node(
-			node, "objekt", "Iterationsobjekt: Mietvertrag", 0, profile, "Erweitert"
+			node, "objekt", "Iterationsobjekt: Beispieldatensatz", 0, profile, "Erweitert"
 		)
 		self.assertTrue(standard["token"])
 		self.assertEqual(standard["children"], [])
@@ -442,17 +442,17 @@ class TestSerienbriefVorlage(unittest.TestCase):
 		}
 		self.assertIsNone(
 			serienbrief_vorlage._filter_placeholder_node(
-				node, "objekt", "Iterationsobjekt: Mietvertrag", 1, profile, "Standard"
+				node, "objekt", "Iterationsobjekt: Beispieldatensatz", 1, profile, "Standard"
 			)
 		)
 		self.assertIsNone(
 			serienbrief_vorlage._filter_placeholder_node(
-				node, "objekt", "Iterationsobjekt: Mietvertrag", 1, profile, "Erweitert"
+				node, "objekt", "Iterationsobjekt: Beispieldatensatz", 1, profile, "Erweitert"
 			)
 		)
 		self.assertIsNone(
 			serienbrief_vorlage._filter_placeholder_node(
-				node, "objekt", "Iterationsobjekt: Mietvertrag", 1, profile, "Alle"
+				node, "objekt", "Iterationsobjekt: Beispieldatensatz", 1, profile, "Alle"
 			)
 		)
 
@@ -476,7 +476,7 @@ class TestSerienbriefVorlage(unittest.TestCase):
 			],
 		}
 		all_fields = serienbrief_vorlage._filter_placeholder_node(
-			node, "objekt", "Iterationsobjekt: Mietvertrag", 0, profile, "Alle"
+			node, "objekt", "Iterationsobjekt: Beispieldatensatz", 0, profile, "Alle"
 		)
 		self.assertTrue(all_fields["token"])
 		self.assertEqual(len(all_fields["children"]), 1)

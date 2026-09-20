@@ -359,24 +359,13 @@ const PlaceholderPane = ({
 // Bausteine pane (echt)
 // =========================
 const BAUSTEIN_VALUE_TYPES = new Set(["Text", "Bool"]);
-const BAUSTEIN_AUTO_TAGS = [
-  { tag: "Briefgestaltung", match: /briefkopf|footer|fußzeile|fusszeile|unterschrift/i },
-  { tag: "Betriebskosten", match: /betriebskosten|bk[- ]?abrechnung|nebenkosten|heizkosten/i },
-  { tag: "Zahlung & Mahnung", match: /bank|zahlung|mietkonto|rückstand|rueckstand|mahnung/i },
-  { tag: "Anrede & Personen", match: /anrede|mieter.*name|eigentümer|eigentuemer|empfänger|empfaenger/i },
-  { tag: "Mietvertrag", match: /mietvertrag|miethistorie|mietverhältnis|mietverhaeltnis/i },
-  { tag: "Hinweise", match: /hinweis|lüft|lueft|rauchwarn|information/i },
-];
-
 function tagsForBaustein(baustein) {
   const explicit = Array.isArray(baustein?.tags)
     ? baustein.tags
     : String(baustein?.tags || "").split(",");
   const clean = explicit.map((tag) => String(tag || "").trim()).filter(Boolean);
   if (clean.length) return [...new Set(clean)];
-  const haystack = `${baustein?.title || ""} ${baustein?.description || ""}`;
-  const automatic = BAUSTEIN_AUTO_TAGS.filter((rule) => rule.match.test(haystack)).map((rule) => rule.tag);
-  return automatic.length ? automatic : ["Sonstige"];
+  return ["Sonstige"];
 }
 
 const BausteinePane = ({

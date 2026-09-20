@@ -17,7 +17,6 @@ from PyPDF2 import PdfMerger, PdfReader, PdfWriter
 from jinja2 import TemplateError, Undefined, UndefinedError
 from markupsafe import Markup
 from frappe import _
-from frappe.contacts.doctype.address.address import get_default_address
 from frappe.model.document import Document
 from frappe.utils import cint, cstr, format_date, formatdate, now_datetime, today
 from frappe.utils.jinja import get_jenv
@@ -31,6 +30,8 @@ from mail_merge.mail_merge.utils.serienbrief_fonts import (
 
 from mail_merge.mail_merge.utils.jinja_source_sanitizer import sanitize_richtext_jinja_source
 from mail_merge.mail_merge.utils.brand_print import apply_print_saving_brand_assets
+from mail_merge.mail_merge.utils.letter_composer_state import input_fingerprint
+from mail_merge.mail_merge.utils.render_inputs import context_fields, input_fields
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import read_file_url_bytes
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import render_pdf_bytes_as_html_fragment
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import render_pdf_form_block
@@ -189,7 +190,7 @@ def _strict_finalize(value):
 	"""Jinja ``finalize``-Hook: wirft, wenn ein Expression-Wert ``None`` ist.
 
 	``StrictUndefined`` fängt nur *undefined* Variablen ab — ein DocType-Feld
-	mit Wert ``None`` (z.B. ``mieter.first_name`` auf einem Customer ohne
+	mit Wert ``None`` (z.B. ``objekt.first_name`` auf einem Datensatz ohne
 	First-Name) ist *defined* und würde sonst als Literal ``"None"`` ins PDF
 	rendern. Hier prüfen wir den finalen Output-Wert; conditional-Pfade
 	(``{% if x %}``) sind nicht betroffen, weil Jinja ``finalize`` nur auf
@@ -303,13 +304,6 @@ SERIENBRIEF_PDF_OPTIONS: Dict[str, str] = {
 	"margin-left": "25mm",
 }
 
-BK_MIETER_PDF_OPTIONS: Dict[str, str] = {
-	"page-size": "A4",
-	"margin-top": "12mm",
-	"margin-right": "12mm",
-	"margin-bottom": "8mm",
-	"margin-left": "20mm",
-}
 
 
 def get_serienbrief_pdf_options() -> Dict[str, str]:
@@ -880,7 +874,11 @@ class SerienbriefDurchlauf(Document):
 					pass
 
 		# Zusammenfassung für den aufrufenden (Job-)Code; kein throw bei leerem Lauf.
-		self._last_run_counts = {"total": total, **counts}
+		self._last_run_counts = {"total": total, **counts, "input_fingerprint": input_fingerprint(self)}
+		frappe.db.set_value(
+			"Serienbrief Durchlauf", self.name, "run_summary",
+			json.dumps(self._last_run_counts), update_modified=False,
+		)
 		return created
 
 	def _build_merged_pdf(
@@ -1201,10 +1199,9 @@ class SerienbriefDurchlauf(Document):
 		total: int | None = None,
 		strict_variables: bool = True,
 	) -> Dict[str, Any]:
-		letter_date = self.date or today()
 
 		iteration_doc = getattr(row, "_iteration_doc", None)
-		# Virtuelle Felder über onload triggern (z.B. BK Mieter.differenz). Idempotent.
+		# Virtuelle Felder über onload triggern (z.B. berechnete Dokumentfelder). Idempotent.
 		if iteration_doc is not None:
 			try:
 				iteration_doc.run_method("onload")
@@ -1213,8 +1210,7 @@ class SerienbriefDurchlauf(Document):
 
 		context = frappe._dict(
 			objekt=_wrap_jinja_value(iteration_doc),
-			datum=format_date(letter_date),
-			datum_iso=letter_date,
+
 			druck_schwarz_weiss=bool(getattr(self, "_druck_schwarz_weiss", False)),
 			serienbrief=frappe._dict(
 				titel=self.title,
@@ -1227,12 +1223,15 @@ class SerienbriefDurchlauf(Document):
 			),
 			outputs=frappe._dict(),
 		)
-		self._apply_legacy_context_aliases(context)
+		for field in context_fields(self):
+			context[field["name"]] = _coerce_context_value(field["default"], field["type"])
+		context["_serienbrief_value_overrides"] = _build_value_override_mapping(template, self, row)
+		_apply_context_overrides(context, template, self)
 
 		if template:
-			context["_serienbrief_value_overrides"] = _build_value_override_mapping(template, self, row)
 			self._apply_template_variables(context, template)
 			self._apply_serienbrief_template_variables(context, template, row)
+			_apply_context_overrides(context, template, self)
 			if strict_variables:
 				self._verify_template_variables_resolved(context, template)
 		return context
@@ -1410,6 +1409,7 @@ class SerienbriefDurchlauf(Document):
 		).strip()
 		objekt = cstr(getattr(footer_doc, "objekt", None) or "").strip()
 		row = frappe._dict(iteration_doctype=iteration_doctype, objekt=objekt)
+		row._iteration_variablen_werte = getattr(footer_doc, "variablen_werte", None)
 		row._iteration_doc = getattr(footer_doc, "_iteration_doc", None)
 		if row._iteration_doc is None and iteration_doctype and objekt:
 			try:
@@ -1428,22 +1428,9 @@ class SerienbriefDurchlauf(Document):
 		return base if counts[base] == 1 else f"{base}_{counts[base]}"
 
 	def _build_block_context(self, base_context: Dict[str, Any], block_doc, block_row, block_key: str) -> frappe._dict:
-		# Block-Context ist strict: nur globale Werte + deklarierte Variablen.
-		# ``objekt`` wird bewusst NICHT vererbt — Bausteine müssen ihre Daten
-		# über Variablen + Standardpfade deklarieren. So bleibt der Body sauber
-		# (``{{ variable.X }}``) und es gibt keine versteckte
-		# Magic über mehrstufige Link-Field-Pfade in Jinja.
-		block_context = frappe._dict(
-			datum=base_context.get("datum"),
-			datum_iso=base_context.get("datum_iso"),
-			druck_schwarz_weiss=bool(base_context.get("druck_schwarz_weiss")),
-			serienbrief=base_context.get("serienbrief"),
-			outputs=base_context.get("outputs") or frappe._dict(),
-			baustein=frappe._dict(key=block_key, name=getattr(block_doc, "name", None), title=getattr(block_doc, "title", None)),
-		)
-		# Infrastrukturwerte des Parent-Kontexts mitgeben. Im normalen Durchlauf
-		# sind diese Keys nicht gesetzt; die Beispielvorschau nutzt sie, um nur
-		# Frappe/DocType-Zugriffe und die Darstellung der Mockwerte auszutauschen.
+		# Only declared inputs enter a block. Paths resolve against the parent.
+		block_context = frappe._dict(baustein=frappe._dict(key=block_key, name=block_doc.name, title=block_doc.title))
+		# Rendering callbacks are infrastructure, not inherited business values.
 		for key in ("frappe", "_serienbrief_finalize", "_serienbrief_on_unresolvable"):
 			if key in base_context:
 				block_context[key] = base_context[key]
@@ -1776,16 +1763,15 @@ class SerienbriefDurchlauf(Document):
 				value = inline_value_override[key]
 			elif raw_key in inline_value_override:
 				value = inline_value_override[raw_key]
-			if variable_type not in ("Text", "Bool"):
-				path = (
-					cstr(path_mapping.get(key) or "").strip()
-					or cstr(path_mapping.get(raw_key) or "").strip()
-					or cstr(path_mapping.get(getattr(variable, "reference_doctype", None)) or "").strip()
-					or cstr(default_paths.get(key) or "").strip()
-					or cstr(default_paths.get(raw_key) or "").strip()
-					or cstr(default_paths.get(getattr(variable, "reference_doctype", None)) or "").strip()
-					or ("__self__" if iteration_doctype == cstr(getattr(variable, "reference_doctype", None) or "").strip() else key)
-				)
+			path = (
+				path
+				or cstr(path_mapping.get(key) or "").strip()
+				or cstr(path_mapping.get(raw_key) or "").strip()
+				or cstr(path_mapping.get(getattr(variable, "reference_doctype", None)) or "").strip()
+				or cstr(default_paths.get(key) or "").strip()
+				or cstr(default_paths.get(raw_key) or "").strip()
+				or cstr(default_paths.get(getattr(variable, "reference_doctype", None)) or "").strip()
+			)
 
 			resolved = None
 			path_was_set = bool(path)
@@ -1843,8 +1829,7 @@ class SerienbriefDurchlauf(Document):
 				_(
 					"Im Baustein {0} fehlen Werte für folgende Variablen:<br>{1}<br><br>"
 					"Hinweis: Im Vorlagen-Formular unter „Feldpfade & Variablen“ den Baustein auswählen "
-					"und pro Variable einen Festwert oder Pfad hinterlegen, oder eine gleichnamige "
-					"Vorlagen-Variable mit Wert setzen."
+					"und pro Variable einen Festwert oder Pfad hinterlegen. "
 				).format(frappe.bold(block_title), "<br>".join(missing))
 			)
 
@@ -1866,6 +1851,11 @@ class SerienbriefDurchlauf(Document):
 			raw_key = cstr(getattr(variable, "variable", None) or getattr(variable, "label", None) or "")
 			key = frappe.scrub(raw_key) if raw_key else ""
 			if not key:
+				continue
+
+			override = (context.get("_serienbrief_value_overrides") or {}).get(key)
+			if _entry_has_explicit_value(override):
+				context[key] = _wrap_jinja_value(_coerce_context_value(override["value"], variable_type))
 				continue
 
 			entry = mapping.get(key) or {}
@@ -1939,10 +1929,10 @@ class SerienbriefDurchlauf(Document):
 			path = cstr(entry.get("path") or "").strip()
 			value = entry.get("value")
 
-			resolved = None
+			resolved = value
 			if variable_type == "Doctype Liste" and path and not path.endswith("[]"):
 				path = f"{path}[]"
-			if path:
+			if path and resolved is None:
 				resolved = _resolve_value_path(path, context)
 				if resolved is None:
 					frappe.throw(
@@ -1960,10 +1950,6 @@ class SerienbriefDurchlauf(Document):
 				continue
 
 			context[key] = _wrap_jinja_value(resolved)
-
-	def _apply_legacy_context_aliases(self, context: Dict[str, Any]) -> None:
-		"""No implicit aliases in the generic core."""
-		return None
 
 	def _verify_template_variables_resolved(self, context: Dict[str, Any], template) -> None:
 		variable_defs = template.get("variables") or []
@@ -2093,45 +2079,7 @@ class SerienbriefDurchlauf(Document):
 				font-size: 9.5pt;
 			}
 		""").replace("__HV_SERIENBRIEF_FONT_FAMILY__", serienbrief_font_family())
-		if self._is_bk_mieter_print():
-			custom_css += """
-			@page {
-				size: A4;
-				margin: 12mm 12mm 8mm 20mm;
-			}
-			body,
-			.serienbrief-root.hv-bk-mieter-print,
-			.print-format .serienbrief-root.hv-bk-mieter-print {
-				font-size: 10pt !important;
-				line-height: 1.22;
-			}
-			.serienbrief-root.hv-bk-mieter-print .sb-letterhead {
-				margin-top: 0.2cm;
-			}
-			.serienbrief-root.hv-bk-mieter-print .sb-address-window {
-				padding-top: 2.2cm;
-				font-size: 9pt;
-			}
-			.serienbrief-root.hv-bk-mieter-print .sb-sender {
-				font-size: 8pt;
-			}
-			.serienbrief-root.hv-bk-mieter-print .sb-office-hours,
-			.serienbrief-root.hv-bk-mieter-print .sb-return-address {
-				font-size: 7pt;
-			}
-			.serienbrief-root.hv-bk-mieter-print .sb-date {
-				margin-top: 0.2cm;
-			}
-			.serienbrief-root.hv-bk-mieter-print p {
-				line-height: 1.22;
-			}
-			.serienbrief-root.hv-bk-mieter-print .serienbrief-block {
-				margin-bottom: 6px;
-			}
-			.serienbrief-root.hv-bk-mieter-print table {
-				line-height: 1.15;
-			}
-			"""
+		custom_css += self._print_profile().get("css", "")
 		return custom_css
 
 	def _default_pdf_options(self) -> dict[str, str]:
@@ -2139,18 +2087,18 @@ class SerienbriefDurchlauf(Document):
 		# auseinanderlaufen. Werte stammen jetzt aus ``Serienbrief Einstellungen``
 		# (Single) — siehe ``get_serienbrief_pdf_options``. Fallback bei Fehler
 		# auf die SERIENBRIEF_PDF_OPTIONS-Hardcodes.
-		if self._is_bk_mieter_print():
-			return dict(BK_MIETER_PDF_OPTIONS)
-		return get_serienbrief_pdf_options()
+		return {**get_serienbrief_pdf_options(), **self._print_profile().get("options", {})}
 
 	def _wrap_html_fragment(self, body_html: str) -> str:
 		classes = "serienbrief-root"
-		if self._is_bk_mieter_print():
-			classes += " hv-bk-mieter-print"
+		classes += " " + self._print_profile().get("classes", "")
 		return f'<div class="{classes}">{body_html}</div>'
 
-	def _is_bk_mieter_print(self) -> bool:
-		return cstr(getattr(self, "iteration_doctype", "") or "").strip() == "Betriebskostenabrechnung Mieter"
+	def _print_profile(self):
+		profile = {}
+		for handler in frappe.get_hooks("mail_merge_print_profile"):
+			profile.update(frappe.get_attr(handler)(self) or {})
+		return profile
 
 	def _wrap_html(self, body_html: str, paged_polyfill: bool = False, footer_doc=None) -> str:
 		# paged_polyfill: nur in Browser-Previews aktivieren, NICHT in der
@@ -2281,14 +2229,8 @@ class SerienbriefDurchlauf(Document):
 			if value:
 				row_data.setdefault(df.fieldname, value)
 
-		display_name = (
-			row_data.get("anzeigename")
-			or getattr(iteration_doc, "anzeigename", None)
-			or getattr(iteration_doc, "title", None)
-			or getattr(iteration_doc, "customer_name", None)
-			or getattr(iteration_doc, "kunden_name", None)
-			or getattr(iteration_doc, "name", None)
-		)
+		display_name = iteration_doc.get(iteration_meta.get_title_field() or "name") or iteration_doc.name
+
 		if display_name:
 			row_data["anzeigename"] = display_name
 
@@ -2325,15 +2267,14 @@ class SerienbriefDurchlauf(Document):
 		if not name:
 			return None
 		# Existenz-Check vor get_doc, sonst leakt frappe.throw eine msgprint-
-		# Toast in die Response (siehe Kommentar in _load_mieter).
+		# Toast in die Response (siehe Kommentar in _load_doc).
 		if not frappe.db.exists(doctype, name):
 			return None
 		try:
 			doc = frappe.get_doc(doctype, name)
 		except frappe.DoesNotExistError:
 			return None
-		# ``onload`` füllt virtuelle Felder (z.B. ``Betriebskostenabrechnung
-		# Mieter.differenz``) — Frappe's get_doc ruft onload nur in UI-Pfaden
+		# ``onload`` füllt virtuelle Felder (z.B. berechnete Dokumentattribute) — Frappe's get_doc ruft onload nur in UI-Pfaden
 		# auf, deswegen hier explizit triggern, sonst fehlen die berechneten
 		# Werte beim Render.
 		try:
@@ -2341,60 +2282,6 @@ class SerienbriefDurchlauf(Document):
 		except Exception:
 			pass
 		return doc
-
-	def _extract_address(self, link_doctype: str | None, link_name: str | None) -> Dict[str, str]:
-		if not link_doctype or not link_name:
-			return {}
-
-		address_name = get_default_address(link_doctype, link_name)
-		if not address_name:
-			return {}
-
-		return self._address_dict_from_name(address_name)
-
-	def _address_dict_from_name(self, address_name: str | None) -> Dict[str, str]:
-		if not address_name:
-			return {}
-		try:
-			address = frappe.get_doc("Address", address_name)
-		except frappe.DoesNotExistError:
-			return {}
-
-		street = ", ".join(filter(None, [cstr(address.address_line1).strip(), cstr(address.address_line2).strip()]))
-		zip_code = cstr(getattr(address, "pincode", None) or getattr(address, "zip", None)).strip()
-		city = cstr(address.city).strip()
-		plz_ort = self._format_plz_ort(zip_code, city)
-
-		return {
-			"street": street,
-			"zip": zip_code,
-			"city": city,
-			"plz_ort": plz_ort,
-			"display": "\n".join(filter(None, [street, plz_ort])),
-			"title": cstr(address.address_title).strip(),
-			"name": cstr(address.name).strip(),
-		}
-
-	def _guess_person_name(self, doc) -> str:
-		if not doc:
-			return ""
-
-		first = cstr(getattr(doc, "first_name", "")).strip()
-		last = cstr(getattr(doc, "last_name", "")).strip()
-		full = " ".join(filter(None, [first, last]))
-		if full:
-			return full
-
-		for field in ("customer_name", "full_name", "name1", "vorname", "nachname", "company_name", "subject", "name"):
-			value = cstr(getattr(doc, field, "")).strip()
-			if value:
-				return value
-
-		return cstr(getattr(doc, "title", "")).strip()
-
-	def _format_plz_ort(self, plz: str, ort: str) -> str:
-		parts = [plz, ort]
-		return " ".join([p for p in parts if p]).strip()
 
 def _scrub_value(value: str) -> str:
 	value = (value or "").lower()
@@ -2445,6 +2332,25 @@ def _parse_variable_values(raw: str | None) -> dict[str, dict[str, Any]]:
 	return parsed
 
 
+def _coerce_context_value(value, kind):
+	if kind == "Datum" and value not in (None, ""):
+		return _SerienbriefDateValue(value)
+	return _coerce_bool_if_needed(value, kind)
+
+
+def _apply_context_overrides(context, template=None, run=None):
+	fields = input_fields(template, run) if template else context_fields(run)
+	types = {field["name"]: field["type"] for field in fields}
+	context["_input_types"] = types
+	for key, entry in (context.get("_serienbrief_value_overrides") or {}).items():
+		if not _entry_has_explicit_value(entry) or key.startswith("_") or "." in key:
+			continue
+		context[key] = _coerce_context_value(entry["value"], types.get(key))
+	for field in context_fields(run):
+		for alias in field.get("aliases", []):
+			context[alias] = str(context.get(field["name"]) or "")
+
+
 def _path_override_key(path: str) -> str:
 	return f"{PATH_OVERRIDE_PREFIX}{cstr(path or '').strip()}"
 
@@ -2454,8 +2360,6 @@ def _entry_has_explicit_value(entry: dict[str, Any] | None) -> bool:
 		return False
 	value = entry.get("value")
 	if value is None:
-		return False
-	if isinstance(value, str) and not value.strip():
 		return False
 	return True
 
@@ -2498,11 +2402,11 @@ def _as_variable_values(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _collect_auto_variable_values(context: Dict[str, Any]) -> dict[str, dict[str, Any]]:
-	return {}
+	return {f["name"]: {"value": context.get(f["name"], f["default"])} for f in context_fields()}
 
 
 def _collect_auto_variable_field_meta(context: Dict[str, Any]) -> dict[str, dict[str, Any]]:
-	return {}
+	return {f["name"]: {"label": f["label"], "variable_type": f["type"], "description": f["description"]} for f in context_fields()}
 
 
 def _get_textbaustein_template_source(block_doc) -> str:
@@ -2604,9 +2508,7 @@ class _LinkResolvingRow:
 
 	Der Wrapper wird für Doctype-Werte im Jinja-Kontext und für aufgelöste
 	Listen-Inputs aus ``[]``-Mapping-Pfaden verwendet. Sub-Docs werden rekursiv
-	weiter gewrappt; Child-Tables liefern eine Liste gewrappter Zeilen;
-	``.address`` an einem Dynamic-Link-Doctype liefert das passende Address-Doc
-	(analog zur Resolver-Address-Magic).
+	weiter gewrappt; Child-Tables liefern eine Liste gewrappter Zeilen.
 
 	String-Vergleiche bleiben funktional, weil ``__str__``/``__eq__`` an den
 	Doc-Namen delegieren.
@@ -2631,16 +2533,6 @@ class _LinkResolvingRow:
 	def __getattr__(self, key: str):
 		source = object.__getattribute__(self, "_source")
 		meta = object.__getattribute__(self, "_meta")
-
-		# Address-Magic: ``.address`` an einem Adress-fähigen DocType lädt das
-		# Default-Address-Doc (Frappe Dynamic-Link).
-		if (
-			key == "address"
-			and getattr(source, "doctype", None) in _ADDRESS_TARGET_DOCTYPES
-			and getattr(source, "name", None)
-		):
-			address_doc = _get_magic_address_doc(source)
-			return _LinkResolvingRow(address_doc) if address_doc else None
 
 		value = _dig_attr(source, key)
 
@@ -2839,43 +2731,12 @@ def _dig_attr(source: Any, key: str) -> Any:
 _BRACKET_INDEX_RE = re.compile(r"^([^\[\]]+)((?:\[\d+\])+)$")
 _BRACKET_INDEX_PARTS_RE = re.compile(r"\[(\d+)\]")
 
-# DocTypes mit Frappe-Dynamic-Link-Adressen: ``address`` als Resolver-
-# Pfad-Schritt wird automatisch zum Default-Address-Doc aufgelöst, sodass
-# Datenplatzhalter ``{{$ objekt.kunde.address.address_line1 $}}`` schreiben
-# können statt ``frappe.get_doc("Address", get_default_address(...))``.
-_ADDRESS_TARGET_DOCTYPES = {"Customer", "Contact", "Supplier"}
-
-
-def _get_magic_address_doc(source: Any):
-	"""Resolve ``.address`` for address-capable docs.
-
-	This falls back to Frappe's default-address resolver for common
-	party/contact doctypes.
-	"""
-	doctype = getattr(source, "doctype", None)
-	name = getattr(source, "name", None)
-	if not doctype or not name:
-		return None
-
-	if doctype not in _ADDRESS_TARGET_DOCTYPES:
-		return None
-
-	addr_name = None
-	try:
-		addr_name = get_default_address(doctype, name)
-	except Exception:
-		addr_name = None
-
-	if not addr_name:
-		return None
-
-	try:
-		return frappe.get_cached_doc("Address", addr_name)
-	except frappe.DoesNotExistError:
-		return None
-
-
 def _resolve_value_path(path: str, context: Dict[str, Any]) -> Any:
+	path = cstr(path).strip()
+	for key in (path, _path_override_key(path)):
+		override = _get_value_override(context, key)
+		if override is not None:
+			return _coerce_context_value(override, (context.get("_input_types") or {}).get(path))
 	raw_segments = [seg.strip() for seg in cstr(path).split(".") if seg.strip()]
 	if not raw_segments:
 		return None
@@ -2903,10 +2764,7 @@ def _resolve_value_path(path: str, context: Dict[str, Any]) -> Any:
 	if raw_segments[0] == "__self__":
 		raw_segments[0] = "objekt"
 
-	allowed_roots = {"objekt", "serienbrief", "outputs", "datum", "datum_iso"}
-	has_explicit_root = raw_segments[0] in allowed_roots or (
-		isinstance(context, dict) and raw_segments[0] in context
-	)
+	has_explicit_root = isinstance(context, dict) and raw_segments[0] in context
 	root_name = raw_segments[0] if has_explicit_root else "objekt"
 	segments = raw_segments[1:] if has_explicit_root else raw_segments
 	if not segments:
@@ -3020,22 +2878,6 @@ def _resolve_value_path(path: str, context: Dict[str, Any]) -> Any:
 				idx += 1
 				if consumed_numeric:
 					idx += 1
-				continue
-
-			# Adress-Magic: ``address`` als Pfad-Schritt an einem Adress-fähigen
-			# DocType lädt transparent das Default-Address-Doc via Frappe-
-			# Dynamic-Link-Resolver. Damit funktioniert
-			# ``{{ objekt.kunde.address.address_line1 }}`` ohne dass jeder
-			# DocType ein Custom-Adress-Feld bekommt.
-			if (
-				segment == "address"
-				and getattr(current, "doctype", None) in _ADDRESS_TARGET_DOCTYPES
-				and getattr(current, "name", None)
-			):
-				current = _get_magic_address_doc(current)
-				if current is None:
-					return None
-				idx += 1
 				continue
 
 			# Follow Link/Table fields using DocType meta so Pfade aus dem Wizard funktionieren.
@@ -4215,6 +4057,8 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 	):
 		dok_by_objekt[d.objekt] = d
 
+	template_doc = frappe.get_cached_doc("Serienbrief Vorlage", doc.vorlage) if doc.vorlage else None
+	input_definitions = input_fields(template_doc, doc) if template_doc else context_fields(doc)
 	recipients: List[Dict[str, Any]] = []
 	overrides_out: Dict[str, Dict[str, Any]] = {}
 	for it in doc.get("iteration_objekte") or []:
@@ -4223,11 +4067,19 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 			continue
 		name = None
 		address = ""
+		resolved_values = {}
 		try:
 			row = doc._build_target_row_from_iteration(it)
 			if row:
 				name = getattr(row, "anzeigename", None)
 				address = doc._format_recipient_address(row)
+				row._iteration_variablen_werte = None
+				context = doc._build_context(row, len(recipients) + 1, template=template_doc, strict_variables=False)
+				for field in input_definitions:
+					value = _resolve_value_path(field["path"], context)
+					if isinstance(value, (str, bool, int, float)) or value is None:
+						resolved_values[field["name"]] = value
+
 		except Exception:
 			pass
 		d = dok_by_objekt.get(objekt)
@@ -4239,6 +4091,7 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 		recipients.append(
 			{
 				"id": objekt,
+				"resolved_values": resolved_values,
 				"name": (d.title if d else None) or name or objekt,
 				"address": address,
 				"recipient_email": (d.recipient_email if d else "") or "",
@@ -4270,20 +4123,11 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 		supports_druck_schwarz_weiss = _template_supports_druck_schwarz_weiss(template_doc)
 		global_values = _parse_variable_values(doc.variablen_werte)
 		vorlage_defaults = _parse_variable_values(getattr(template_doc, "variablen_werte", None))
-		for v in _collect_template_variables(template_doc):
-			key = v["key"]
-			dv = vorlage_defaults.get(key, {})
-			gv = global_values.get(key, {})
-			variables_out.append(
-				{
-					"name": key,
-					"label": v["label"],
-					"type": v["variable_type"],
-					"desc": v["description"],
-					"default": dv.get("value") if dv.get("value") is not None else "",
-					"value": gv.get("value") if gv.get("value") is not None else "",
-				}
-			)
+		for field in input_definitions:
+			key = field["name"]
+			entry = global_values.get(key) or {}
+			value = entry.get("value") if entry.get("value") is not None else field["default"]
+			variables_out.append({"name": key, "label": field["label"], "type": field["type"], "desc": field["description"], "default": field["default"], "value": value, "path": field["path"]})
 		known_keys = {item["name"] for item in variables_out}
 		for assignment in template_doc.get("variablenbelegungen") or []:
 			label = cstr(getattr(assignment, "bezeichnung", "") or "").strip()
@@ -4330,6 +4174,10 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 		"per_recipient_overrides": overrides_out,
 		"recipients": recipients,
 		"counts": counts,
+		"snapshot_state": (
+			"current" if counts.get("input_fingerprint") == input_fingerprint(doc)
+			else "stale" if counts.get("input_fingerprint") else "unknown"
+		),
 	}
 
 
@@ -4344,6 +4192,8 @@ def set_run_variables(
 		raise frappe.PermissionError
 	if int(getattr(doc, "docstatus", 0) or 0) != 0:
 		frappe.throw(_("Der Durchlauf ist bereits abgeschlossen (eingereicht)."))
+	if doc.get("status") == "Läuft":
+		frappe.throw(_("Der Durchlauf läuft gerade. Bitte warten Sie bis zum Abschluss."))
 
 	if variables is not None:
 		if isinstance(variables, str):
@@ -4351,7 +4201,7 @@ def set_run_variables(
 		items = variables.items() if isinstance(variables, dict) else [
 			(v.get("name"), v.get("value")) for v in variables
 		]
-		vw = {cstr(k): {"value": val} for k, val in items if k and val not in (None, "")}
+		vw = {cstr(k): {"value": val} for k, val in items if k and val is not None}
 		frappe.db.set_value(
 			"Serienbrief Durchlauf", docname, "variablen_werte", json.dumps(vw) if vw else "", update_modified=False
 		)
@@ -4362,7 +4212,7 @@ def set_run_variables(
 		for it in doc.get("iteration_objekte") or []:
 			objekt = cstr(getattr(it, "objekt", "") or "")
 			ov = (per_recipient_overrides or {}).get(objekt) or {}
-			ovw = {cstr(k): {"value": val} for k, val in ov.items() if val not in (None, "")}
+			ovw = {cstr(k): {"value": val} for k, val in ov.items() if val is not None}
 			frappe.db.set_value(
 				"Serienbrief Iterationsobjekt", it.name,
 				"variablen_werte", json.dumps(ovw) if ovw else "", update_modified=False,
@@ -4532,13 +4382,27 @@ def create_durchlauf(
 
 
 @frappe.whitelist()
-def update_durchlauf(docname: str, title: str | None = None) -> Dict[str, Any]:
-	"""Kopfdaten eines Durchlauf-Entwurfs ändern (aktuell nur Titel)."""
+def update_durchlauf(docname: str, title: str | None = None, vorlage: str | None = None) -> Dict[str, Any]:
+	"""Titel oder Vorlage eines Durchlauf-Entwurfs ändern."""
 	doc = frappe.get_doc("Serienbrief Durchlauf", docname)
 	if not frappe.has_permission("Serienbrief Durchlauf", "write", doc):
 		raise frappe.PermissionError
 	if int(getattr(doc, "docstatus", 0) or 0) != 0:
 		frappe.throw(_("Der Durchlauf ist bereits abgeschlossen (eingereicht)."))
+	if doc.status == "Läuft":
+		frappe.throw(_("Der Durchlauf läuft gerade. Bitte warten Sie bis zum Abschluss."))
+	if vorlage is not None and vorlage != doc.vorlage:
+		template = frappe.get_doc("Serienbrief Vorlage", vorlage)
+		template.check_permission("read")
+		if template.docstatus == 2:
+			frappe.throw(_("Die Vorlage ist storniert."))
+		if doc.get("iteration_objekte") and template.haupt_verteil_objekt != doc.iteration_doctype:
+			frappe.throw(_("Die Vorlage muss denselben Iterationstyp wie die vorhandenen Empfänger verwenden."))
+		frappe.db.set_value("Serienbrief Durchlauf", docname, {
+			"vorlage": template.name,
+			"kategorie": template.kategorie,
+			"iteration_doctype": template.haupt_verteil_objekt,
+		})
 	if title is not None:
 		new_title = cstr(title).strip()
 		if new_title:

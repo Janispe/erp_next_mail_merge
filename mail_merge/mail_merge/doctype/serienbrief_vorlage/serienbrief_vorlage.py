@@ -3634,18 +3634,7 @@ def _build_iteration_tree(dt):
 	return nodes
 
 
-_PLACEHOLDER_GROUP_ORDER = {
-	"Allgemein": 10,
-	"Vorlagen-Variablen": 20,
-	"Mieter & Anrede": 30,
-	"Mietvertrag": 40,
-	"Wohnung & Immobilie": 50,
-	"Adresse": 60,
-	"Finanzen & Zahlung": 70,
-	"Zeitraum & Termine": 80,
-	"Grunddaten": 90,
-	"Weitere Felder": 900,
-}
+_PLACEHOLDER_GROUP_ORDER = {"Allgemein": 10, "Vorlagen-Variablen": 20, "Grunddaten": 90, "Weitere Felder": 900}
 
 
 def _clean_placeholder_path(value: str | None) -> str:
@@ -3711,21 +3700,6 @@ def _matching_placeholder_rule(path: str, rules: List[Dict[str, Any]]) -> Dict[s
 
 
 def _automatic_placeholder_group(path: str, label: str, fallback: str) -> str:
-	text = f"{path} {label}".casefold()
-	if re.search(r"anrede|mieter|person|kontakt|eigentümer|eigentuemer|vorname|nachname", text):
-		return "Mieter & Anrede"
-	if re.search(r"mietvertrag|mietverhältnis|mietverhaeltnis|vertragspartner|kündigung|kuendigung", text):
-		return "Mietvertrag"
-	# Nicht auf das technische Root-Wort ``objekt`` matchen: Jeder dynamische
-	# Platzhalter beginnt damit und würde sonst fälschlich in dieser Gruppe landen.
-	if re.search(r"wohnung|immobilie|gebäude|gebaeude|einheit|keller|mitvermietet", text):
-		return "Wohnung & Immobilie"
-	if re.search(r"adresse|anschrift|straße|strasse|plz|postleitzahl|ort\b|stadt|land\b", text):
-		return "Adresse"
-	if re.search(r"miete|betrag|konto|iban|bic|bank|zahlung|kosten|saldo|forderung|kaution", text):
-		return "Finanzen & Zahlung"
-	if re.search(r"datum|beginn|ende|frist|zeitraum|fällig|faellig|abschluss|\bvon\b|\bbis\b", text):
-		return "Zeitraum & Termine"
 	return fallback or "Weitere Felder"
 
 

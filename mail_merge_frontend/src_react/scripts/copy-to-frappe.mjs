@@ -7,7 +7,7 @@
 // (/assets/mail_merge/serienbrief_<app>/) referenziert. Ein einzelner
 // `vite build` (Default-Base) würde falsche Asset-URLs erzeugen.
 //
-// Durchlauf wird (noch) nicht deployt.
+// Optional nur eine App bauen: npm run build:frappe -- durchlauf
 import { cp, mkdir, rm, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,7 +23,13 @@ const APPS = {
 	durchlauf: { html: "durchlauf.html", bundle: "serienbrief-durchlauf" },
 };
 
+const requested = process.argv.slice(2);
+if (requested.some(app => !Object.hasOwn(APPS, app))) {
+	throw new Error(`Unbekannte App. Erlaubt: ${Object.keys(APPS).join(", ")}`);
+}
+
 for (const [app, cfg] of Object.entries(APPS)) {
+	if (requested.length && !requested.includes(app)) continue;
 	console.log(`[copy-to-frappe] build ${app} …`);
 	execSync("npx vite build", { cwd: root, stdio: "inherit", env: { ...process.env, HV_APP: app } });
 

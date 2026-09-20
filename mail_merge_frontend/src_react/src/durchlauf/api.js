@@ -47,6 +47,7 @@ const STATUS_REC = {
 function normRecipient(r) {
 	return {
 		id: r.id,
+		resolved_values: r.resolved_values || {},
 		customer: r.name || r.id,
 		address: r.address || "",
 		status: STATUS_REC[r.status] || "pending",
@@ -88,13 +89,15 @@ export async function loadDurchlauf() {
 		can_submit: !!d.can_submit,
 		supports_druck_schwarz_weiss: !!d.supports_druck_schwarz_weiss,
 		counts: d.counts || {},
+		snapshot_state: d.snapshot_state || "unknown",
 		variables: (d.variables || []).map((v) => ({
 			name: v.name,
 			label: v.label,
 			type: v.type,
 			desc: v.desc,
 			default: v.default ?? "",
-			value: v.value ?? "",
+			value: v.value,
+			path: v.path,
 		})),
 		variable_assignments: (d.variable_assignments || []).map((item) => ({
 			label: item.label || "",
@@ -214,4 +217,22 @@ export async function gotoDurchlauf(docname) {
 export async function gotoNew() {
 	if (!embedded) return { ok: true };
 	return await rpc("new_durchlauf", {});
+}
+
+export async function openTemplate(template) {
+  if (!embedded) return { ok: true };
+	// Die Desk-Seite kann nach einem Hot-Update noch eine ältere RPC-Aktionsliste
+	// im Speicher haben. Da das iframe same-origin läuft, ist die direkte
+	// Desk-Navigation hier zuverlässiger und benötigt keinen Backend-Aufruf.
+	const desk = window.parent?.frappe;
+	if (desk?.set_route) {
+		desk.route_options = { hv_serienbrief_template: template };
+		await desk.set_route("serienbrief_editor");
+		return { ok: true };
+	}
+  return rpc("open_editor", { template });
+}
+export async function changeTemplate(vorlage) {
+  if (!embedded) return { ok: true };
+  return rpc("update", { docname: getDocname(), vorlage });
 }

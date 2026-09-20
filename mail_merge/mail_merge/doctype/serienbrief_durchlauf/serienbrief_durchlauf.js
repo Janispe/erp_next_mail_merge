@@ -768,6 +768,10 @@ const hv_apply_incoming_route_options = (frm) => {
 // Namen werden auf whitelisted Methoden gemappt; docname wird host-seitig injiziert.
 const HV_DL = "mail_merge.mail_merge.doctype.serienbrief_durchlauf.serienbrief_durchlauf.";
 const HV_DL_RPC_ACTIONS = {
+	composer_template: "mail_merge.mail_merge.utils.letter_composer.describe_template",
+	composer_recipients: "mail_merge.mail_merge.utils.letter_composer.search_recipients",
+	composer_preview: "mail_merge.mail_merge.utils.letter_composer.preview",
+	composer_save: "mail_merge.mail_merge.utils.letter_composer.save",
 	durchlauf_data: HV_DL + "get_durchlauf_data",
 	run_progress: HV_DL + "get_run_progress",
 	start_run: HV_DL + "start_durchlauf_run",
@@ -856,6 +860,13 @@ const hv_mount_durchlauf_viewer = (frm) => {
 				{ source: "mail-merge-host", type: "rpc-result", id: msg.id, ...payload },
 				event.origin
 			);
+
+		if (msg.action === "open_editor") {
+			frappe.route_options = { hv_serienbrief_template: msg.params?.template };
+			reply({ ok: true, data: {} });
+			frappe.set_route("serienbrief_editor");
+			return;
+		}
 
 		// Nach Objekt-Änderung das Frappe-Formular neu laden (Zeitstempel/Grid aktuell).
 		if (msg.action === "reload_form") {
