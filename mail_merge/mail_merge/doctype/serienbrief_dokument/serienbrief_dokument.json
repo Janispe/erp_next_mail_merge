@@ -29,7 +29,9 @@
   "html",
   "snapshot_section",
   "generated_pdf_file",
-  "variablen_werte"
+  "variablen_werte",
+  "vorlagenversion",
+  "textbaustein_versionen"
  ],
  "fields": [
   {
@@ -187,11 +189,27 @@
    "fieldtype": "Small Text",
    "label": "Variablenwerte",
    "read_only": 1
+  },
+  {
+   "fieldname": "vorlagenversion",
+   "fieldtype": "Link",
+   "label": "Vorlagenversion",
+   "no_copy": 1,
+   "options": "Serienbrief Vorlagenversion",
+   "read_only": 1
+  },
+  {
+   "description": "Mit diesen Baustein-Versionen wurde das Dokument erzeugt (JSON).",
+   "fieldname": "textbaustein_versionen",
+   "fieldtype": "Long Text",
+   "label": "Baustein-Versionen (JSON)",
+   "no_copy": 1,
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-01-20 00:00:00.000000",
+ "modified": "2026-09-30 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Mail Merge",
  "name": "Serienbrief Dokument",

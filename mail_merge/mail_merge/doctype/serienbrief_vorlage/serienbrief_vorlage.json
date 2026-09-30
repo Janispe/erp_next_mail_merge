@@ -23,6 +23,7 @@
   "variablen_werte",
   "inline_baustein_pfade",
   "inline_baustein_werte",
+  "baustein_versionen",
   "preview_pdf_file",
   "notizen_tab",
   "description"
@@ -141,6 +142,13 @@
    "read_only": 1
   },
   {
+   "description": "Fixiert Bausteine dieser Vorlage auf eine Version, JSON { \"<Baustein>\": <Versionsnummer> }. Nicht aufgeführte Bausteine verwenden immer den aktuellen Stand.",
+   "fieldname": "baustein_versionen",
+   "fieldtype": "Code",
+   "label": "Fixierte Baustein-Versionen (JSON)",
+   "options": "JSON"
+  },
+  {
    "description": "Pre-gerendertes Split-Preview-PDF (Beispielwerte). Wird beim on_update via Background-Job aktualisiert und vom Vorlagen-Browser direkt angezeigt, statt jedesmal live zu rendern.",
    "fieldname": "preview_pdf_file",
    "fieldtype": "Attach",
@@ -162,7 +170,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-01-05 02:28:14.242872",
+ "modified": "2026-09-30 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "Mail Merge",
  "name": "Serienbrief Vorlage",

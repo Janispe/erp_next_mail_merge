@@ -56,7 +56,11 @@ def template_snapshot(name):
 		if len(seen) > 100:
 			frappe.throw(_("Zu viele Textbausteine."))
 		block = read("Serienbrief Textbaustein", key)
-		blocks.append(block.as_dict())
+		fixed = core().fixed_version_number(template, key)
+		if fixed:
+			# Fixierte Version: gerendert wird der unveraenderliche Snapshot, nicht der aktuelle Stand.
+			block = core().get_textbaustein(key, template=template)
+		blocks.append({"baustein": key, "fixierte_version": fixed} if fixed else block.as_dict())
 		queue += core()._extract_inline_block_names(core()._get_textbaustein_template_source(block))
 	revision = hashlib.sha256(
 		json.dumps([template.as_dict(), blocks], sort_keys=True, default=str).encode()

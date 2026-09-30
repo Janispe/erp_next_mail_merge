@@ -35,6 +35,8 @@ from mail_merge.mail_merge.utils.render_inputs import context_fields, input_fiel
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import read_file_url_bytes
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import render_pdf_bytes_as_html_fragment
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import render_pdf_form_block
+from mail_merge.mail_merge.utils.textbaustein_loader import fixed_version_number, get_textbaustein  # noqa: F401 (Re-Export fuer Clients)
+from mail_merge.mail_merge.utils.textbaustein_versions import render_version_refs
 
 
 class _IterationTargetRow:
@@ -766,6 +768,9 @@ class SerienbriefDurchlauf(Document):
 		if not has_blocks and not has_content:
 			frappe.throw(_("Die gewählte Vorlage enthält keinen Inhalt."))
 
+		# Nachweis je Dokument: mit welchen Vorlagen- und Baustein-Versionen gerendert wurde.
+		version_refs = render_version_refs(template)
+
 		created: list[str] = []
 		counts = {"generated": 0, "skipped": 0, "error": 0}
 		total = len(iteration_rows)
@@ -844,6 +849,7 @@ class SerienbriefDurchlauf(Document):
 					# submitted Docs ihre pending-Flagge tragen, ohne nachträgliches
 					# Audit-relevantes set_value auf submitted Records.
 					"recreate_pending": 1 if pending else 0,
+					**version_refs,
 				}
 			)
 			doc.insert(ignore_permissions=True)
@@ -1254,7 +1260,7 @@ class SerienbriefDurchlauf(Document):
 				return Markup("")
 
 			try:
-				block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", name)
+				block_doc = get_textbaustein(name, template=template)
 			except frappe.DoesNotExistError:
 				return Markup("")
 			if _is_footer_block(block_doc):
@@ -1334,7 +1340,7 @@ class SerienbriefDurchlauf(Document):
 				continue
 
 			try:
-				block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", block_row.baustein)
+				block_doc = get_textbaustein(block_row.baustein, template=template)
 			except frappe.DoesNotExistError:
 				frappe.throw(_("Der Textbaustein {0} existiert nicht mehr.").format(block_row.baustein))
 			if _is_footer_block(block_doc):
@@ -1375,7 +1381,7 @@ class SerienbriefDurchlauf(Document):
 
 		for block_name, block_row in footer_refs:
 			try:
-				block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", block_name)
+				block_doc = get_textbaustein(block_name, template=template)
 			except frappe.DoesNotExistError:
 				continue
 			if not _is_footer_block(block_doc):
@@ -2437,7 +2443,7 @@ def _collect_template_path_tokens(template) -> list[str]:
 		if not getattr(row, "baustein", None):
 			continue
 		try:
-			block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", row.baustein)
+			block_doc = get_textbaustein(row.baustein, template=template)
 		except Exception:
 			continue
 		add_from_source(_get_textbaustein_template_source(block_doc))
@@ -2453,7 +2459,7 @@ def _template_supports_druck_schwarz_weiss(template) -> bool:
 		if not getattr(row, "baustein", None):
 			continue
 		try:
-			block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", row.baustein)
+			block_doc = get_textbaustein(row.baustein, template=template)
 		except Exception:
 			continue
 		sources.append(_get_textbaustein_template_source(block_doc))
@@ -3000,7 +3006,7 @@ def _collect_block_input_requirements(template, base_doctype: str | None = None)
 			continue
 
 		try:
-			block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", row.baustein)
+			block_doc = get_textbaustein(row.baustein, template=template)
 		except frappe.DoesNotExistError:
 			continue
 
@@ -3225,7 +3231,7 @@ def _collect_block_variables(template) -> list[Dict[str, Any]]:
 			continue
 
 		try:
-			block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", row.baustein)
+			block_doc = get_textbaustein(row.baustein, template=template)
 		except frappe.DoesNotExistError:
 			continue
 
@@ -3272,7 +3278,7 @@ def _collect_pdf_block_mappings(template) -> list[Dict[str, Any]]:
 		if not block_name:
 			continue
 		try:
-			block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", block_name)
+			block_doc = get_textbaustein(block_name, template=template)
 		except frappe.DoesNotExistError:
 			continue
 
@@ -3694,7 +3700,7 @@ def get_serienbrief_assignments(
 			block_context = frappe._dict(context)
 			if block_name:
 				try:
-					block_doc = frappe.get_cached_doc("Serienbrief Textbaustein", block_name)
+					block_doc = get_textbaustein(block_name, template=template)
 					serienbrief._apply_block_variables(block_context, context, block_doc, block_row)
 				except Exception:
 					pass

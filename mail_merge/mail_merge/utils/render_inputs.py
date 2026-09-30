@@ -8,6 +8,8 @@ from __future__ import annotations
 import frappe
 from frappe.utils import nowdate
 
+from mail_merge.mail_merge.utils.textbaustein_loader import get_textbaustein
+
 SCALAR_TYPES = {"Text", "String", "Datum", "Bool", "Zahl"}
 
 
@@ -39,7 +41,7 @@ def input_fields(template, run=None):
 		if name in seen:
 			continue
 		seen.add(name)
-		block = frappe.get_cached_doc("Serienbrief Textbaustein", name)
+		block = get_textbaustein(name, template=template)
 		paths = {**core._get_block_default_path_map(block, template.haupt_verteil_objekt), **core._parse_mapping(block_row.get("pfad_zuordnung") if block_row else None), **(inline_paths.get(name) or {})}
 		values = core._parse_variable_values(block_row.get("variablen_werte") if block_row else None)
 		for row in block.get("variables") or []:
