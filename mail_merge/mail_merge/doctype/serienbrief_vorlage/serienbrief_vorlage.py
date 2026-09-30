@@ -949,20 +949,30 @@ def _render_split_preview_html(
 
 	if not html:
 		return html
-	env = readonly_jenv(undefined=StrictUndefined, finalize=_split_preview_finalize_value)
+	env = readonly_jenv(
+		undefined=StrictUndefined, finalize=_split_preview_finalize_value,
+		autoescape=bool(template_doc and template_doc.get("assistant_created")),
+	)
 	ctx = _split_preview_context(
 		druck_schwarz_weiss=druck_schwarz_weiss,
 		template_doc=template_doc,
 	)
+	if template_doc and template_doc.get("assistant_created"):
+		ctx["_serienbrief_assistant_content"] = True
 	sanitized = sanitize_richtext_jinja_source(html)
 	preprocessed = _preprocess_simple_paths(
 		sanitized, ctx, on_unresolvable=_split_preview_token_fallback
 	)
 	try:
-		return apply_print_saving_brand_assets(
+		rendered = apply_print_saving_brand_assets(
 			env.from_string(preprocessed).render(readonly_context(env, ctx)),
 			druck_schwarz_weiss,
 		)
+		if ctx.get("_serienbrief_assistant_content"):
+			from mail_merge.mail_merge.utils.assistant_templates import validate_passive_html
+
+			validate_passive_html(rendered)
+		return rendered
 	except TemplateError as exc:
 		# StrictUndefined wirft bei undefinierten Root-Variablen / Syntaxfehlern.
 		# Im Live-Preview als Inline-Fehler markieren statt 500 zu werfen.
@@ -1000,22 +1010,32 @@ def _render_split_preview_source(
 
 	if not source:
 		return source
-	env = readonly_jenv(undefined=StrictUndefined, finalize=_split_preview_finalize_value)
+	env = readonly_jenv(
+		undefined=StrictUndefined, finalize=_split_preview_finalize_value,
+		autoescape=bool(template_doc and template_doc.get("assistant_created")),
+	)
 	ctx = _split_preview_context(
 		druck_schwarz_weiss=druck_schwarz_weiss,
 		template_doc=template_doc,
 	)
 	if extra_context:
 		ctx.update(extra_context)
+	if template_doc and template_doc.get("assistant_created"):
+		ctx["_serienbrief_assistant_content"] = True
 	sanitized = sanitize_richtext_jinja_source(source)
 	preprocessed = _preprocess_simple_paths(
 		sanitized, ctx, on_unresolvable=_split_preview_token_fallback
 	)
 	try:
-		return apply_print_saving_brand_assets(
+		rendered = apply_print_saving_brand_assets(
 			env.from_string(preprocessed).render(readonly_context(env, ctx)),
 			druck_schwarz_weiss,
 		)
+		if ctx.get("_serienbrief_assistant_content"):
+			from mail_merge.mail_merge.utils.assistant_templates import validate_passive_html
+
+			validate_passive_html(rendered)
+		return rendered
 	except TemplateError as exc:
 		# StrictUndefined wirft bei undefinierten Root-Variablen / Syntaxfehlern.
 		# Im Live-Preview als Inline-Fehler markieren statt 500 zu werfen.

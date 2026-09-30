@@ -1424,6 +1424,8 @@ class SerienbriefDurchlauf(Document):
 		block_counts: dict[str, int] = {}
 		blocks: list[str] = []
 		context = self._build_footer_context(template, footer_doc)
+		if template.get("assistant_created"):
+			context["_serienbrief_assistant_content"] = True
 		footer_refs: list[tuple[str, Any]] = []
 		seen_blocks: set[str] = set()
 
@@ -1453,7 +1455,12 @@ class SerienbriefDurchlauf(Document):
 				html = cstr(segment.get("html") or "").strip()
 				if html:
 					blocks.append(html)
-		return "\n".join(blocks)
+		html = "\n".join(blocks)
+		if context.get("_serienbrief_assistant_content"):
+			from mail_merge.mail_merge.utils.assistant_templates import validate_passive_html
+
+			validate_passive_html(html)
+		return html
 
 	def _build_footer_context(self, template, footer_doc=None) -> Dict[str, Any]:
 		if frappe.flags.get("hv_serienbrief_split_preview"):
