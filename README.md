@@ -23,3 +23,25 @@ Zusammenfassung enthält weiterhin sämtliche Empfängerfehler. Ausschließlich
 übersprungene Empfänger gelten nicht als Renderfehler.
 
 Regressionstests: `mail_merge.mail_merge.doctype.serienbrief_durchlauf.test_serienbrief_durchlauf`.
+
+## Schreibgeschützte Briefinhalte
+
+Serienbrief-Vorlagen und Textbausteine werden in einer eigenen Jinja-Sandbox
+mit ausdrücklich freigegebenen Lesefunktionen gerendert. Das gilt für den Body,
+Footer, historische Versionen und die Editor-Vorschau. Datenbankänderungen,
+Löschen, Dokumentaktionen, Mailversand, HTTP-Aufrufe, Server-Skripte und weitere
+Jinja-Render-Aufrufe sind über die Briefinhalte gesperrt. Gesperrte Aufrufe
+melden einen Fehler; in der Editor-Vorschau erscheint eine Fehlermarkierung.
+
+Daten lesen, Datums- und Geldformatierung sowie Jinja-Makros, Schleifen und
+lokale Hilfslisten bleiben verfügbar. Die Vorschau verwendet weiterhin ihre
+Beispieldaten. Der normale Frappe-Renderer für andere Anwendungen bleibt
+unverändert.
+
+Zusätzliche globale Jinja-Helfer und Filter aus App-Hooks werden nicht automatisch
+übernommen. Neue Dokumentmethoden benötigen eine geprüfte Freigabe in
+`mail_merge/mail_merge/utils/jinja_readonly.py`; ein Name wie `get_*` reicht
+nicht aus. Dies betrifft ausführbaren Jinja-Inhalt, nicht die Berechtigungen
+zum Bearbeiten von Vorlagen oder zum Erzeugen von Serienbrief-Dokumenten.
+
+Regressionstests: `mail_merge.mail_merge.utils.test_jinja_readonly`.

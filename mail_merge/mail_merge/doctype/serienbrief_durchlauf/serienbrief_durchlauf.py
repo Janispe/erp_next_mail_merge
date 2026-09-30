@@ -15,11 +15,11 @@ import frappe
 from bs4 import BeautifulSoup
 from PyPDF2 import PdfMerger, PdfReader, PdfWriter
 from jinja2 import TemplateError, Undefined, UndefinedError
+from jinja2.sandbox import SecurityError
 from markupsafe import Markup
 from frappe import _
 from frappe.model.document import Document
 from frappe.utils import cint, cstr, format_date, formatdate, now_datetime, today
-from frappe.utils.jinja import get_jenv
 
 from mail_merge.mail_merge.utils.pdf_engine import render_pdf as get_pdf
 from mail_merge.mail_merge.utils.footer import render_document_footer_html
@@ -35,6 +35,7 @@ from mail_merge.mail_merge.utils.render_inputs import context_fields, input_fiel
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import read_file_url_bytes
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import render_pdf_bytes_as_html_fragment
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import render_pdf_form_block
+from mail_merge.mail_merge.utils.jinja_readonly import readonly_context, readonly_jenv
 from mail_merge.mail_merge.utils.textbaustein_loader import fixed_version_number, get_textbaustein  # noqa: F401 (Re-Export fuer Clients)
 from mail_merge.mail_merge.utils.textbaustein_versions import render_version_refs, template_at_version
 
@@ -422,14 +423,15 @@ def _render_serienbrief_template(template: str, context: Dict[str, Any]) -> str:
 		on_unresolvable=on_unresolvable if callable(on_unresolvable) else None,
 	)
 	# Frappes get_jenv() liefert eine Environment mit ChainableUndefined.
-	# Wir clonen sie + überschreiben undefined → StrictUndefined.
+	# Wir clonen sie + überschreiben undefined → StrictUndefined. Vorlagen dürfen
+	# dabei nur lesen (siehe utils/jinja_readonly.py).
 	finalize = context.get("_serienbrief_finalize")
-	jenv = get_jenv().overlay(
+	jenv = readonly_jenv(
 		undefined=StrictUndefined,
 		finalize=finalize if callable(finalize) else _strict_finalize,
 	)
 	try:
-		return jenv.from_string(template).render(context)
+		return jenv.from_string(template).render(readonly_context(jenv, context))
 	except UndefinedError as exc:
 		raw = str(exc) or _("Ein benötigtes Feld fehlt.")
 		human = _humanize_jinja_error(raw)
@@ -463,6 +465,12 @@ def _render_serienbrief_template(template: str, context: Dict[str, Any]) -> str:
 						+ f"<ul style='margin-top: 4px'>{items}</ul>"
 					)
 		frappe.throw(title=_("Serienbrief Fehler"), msg=msg)
+	except SecurityError as exc:
+		frappe.throw(
+			_("Serienbrief-Vorlagen dürfen nur lesen; dieser Aufruf ist nicht erlaubt: {0}").format(exc),
+			frappe.PermissionError,
+			title=_("Serienbrief Fehler"),
+		)
 	except TemplateError:
 		frappe.throw(
 			title="Jinja Template Error",

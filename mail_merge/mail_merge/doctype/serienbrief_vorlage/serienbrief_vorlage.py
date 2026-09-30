@@ -11,7 +11,6 @@ from frappe import _
 from frappe.exceptions import DuplicateEntryError
 from frappe.model.document import Document
 from frappe.utils import cint, cstr, pretty_date, strip_html_tags
-from frappe.utils.jinja import get_jenv
 from jinja2 import Undefined
 from jinja2.exceptions import TemplateError, TemplateRuntimeError
 
@@ -30,6 +29,7 @@ from markupsafe import Markup, escape
 from mail_merge.mail_merge.utils.jinja_source_sanitizer import sanitize_richtext_jinja_source
 from mail_merge.mail_merge.utils.brand_print import apply_print_saving_brand_assets
 from mail_merge.mail_merge.utils import textbaustein_versions, versioning
+from mail_merge.mail_merge.utils.jinja_readonly import readonly_context, readonly_jenv
 from mail_merge.mail_merge.utils.textbaustein_versions import normalize_fixed_versions
 from mail_merge.mail_merge.utils.textbaustein_loader import (
 	fixed_version_number,
@@ -945,9 +945,7 @@ def _render_split_preview_html(
 
 	if not html:
 		return html
-	env = get_jenv().overlay(
-		undefined=StrictUndefined, finalize=_split_preview_finalize_value
-	)
+	env = readonly_jenv(undefined=StrictUndefined, finalize=_split_preview_finalize_value)
 	ctx = _split_preview_context(
 		druck_schwarz_weiss=druck_schwarz_weiss,
 		template_doc=template_doc,
@@ -958,7 +956,7 @@ def _render_split_preview_html(
 	)
 	try:
 		return apply_print_saving_brand_assets(
-			env.from_string(preprocessed).render(ctx),
+			env.from_string(preprocessed).render(readonly_context(env, ctx)),
 			druck_schwarz_weiss,
 		)
 	except TemplateError as exc:
@@ -998,9 +996,7 @@ def _render_split_preview_source(
 
 	if not source:
 		return source
-	env = get_jenv().overlay(
-		undefined=StrictUndefined, finalize=_split_preview_finalize_value
-	)
+	env = readonly_jenv(undefined=StrictUndefined, finalize=_split_preview_finalize_value)
 	ctx = _split_preview_context(
 		druck_schwarz_weiss=druck_schwarz_weiss,
 		template_doc=template_doc,
@@ -1013,7 +1009,7 @@ def _render_split_preview_source(
 	)
 	try:
 		return apply_print_saving_brand_assets(
-			env.from_string(preprocessed).render(ctx),
+			env.from_string(preprocessed).render(readonly_context(env, ctx)),
 			druck_schwarz_weiss,
 		)
 	except TemplateError as exc:
