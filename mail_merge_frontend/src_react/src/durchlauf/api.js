@@ -98,6 +98,7 @@ export async function loadDurchlauf() {
 			default: v.default ?? "",
 			value: v.value,
 			path: v.path,
+			reference_doctype: v.reference_doctype || "",
 		})),
 		variable_assignments: (d.variable_assignments || []).map((item) => ({
 			label: item.label || "",
@@ -175,6 +176,12 @@ export async function availableRecipients(query) {
 		return { items, doctype: DURCHLAUF.iteration_doctype };
 	}
 	return await rpc("available_recipients", { docname: getDocname(), query: query || "" });
+}
+
+// Fester Datensatz für Doctype-Variablen: nur lesbare Datensätze. → { items: [{id,label}] }.
+export async function searchRecords(doctype, query) {
+	if (!embedded) return { items: [], doctype };
+	return await rpc("record_search", { doctype: doctype || "", query: query || "" });
 }
 
 // Sammel-PDF aus den bereits generierten Dokumenten. → { file_url }.

@@ -2491,6 +2491,46 @@ def _load_record_value(value: Any, reference_doctype: str | None, variable_type:
 	return records if variable_type == "Doctype Liste" else records[0]
 
 
+def _record_display_value(value: Any) -> Any:
+	"""Geladene Datensätze als Namen (Liste bei Doctype Liste) für Anzeigen/Clients."""
+	if isinstance(value, (list, tuple)):
+		return [cstr(getattr(item, "name", item)) for item in value]
+	if _is_document_like(value):
+		return cstr(getattr(value, "name", "") or "")
+	return value
+
+
+def _record_input_fields(run) -> dict[str, dict[str, Any]]:
+	if not getattr(run, "vorlage", None):
+		return {}
+	template = run._run_template()
+	return {
+		field["name"]: field
+		for field in input_fields(template, run, include_records=True)
+		if field["type"] in RECORD_TYPES
+	}
+
+
+def _validate_record_inputs(values: dict[str, dict[str, Any]], record_fields: dict[str, dict[str, Any]]) -> None:
+	"""Gespeicherte Datensatz-Werte müssen existieren und lesbar sein — sonst könnte
+	jemand mit Schreibrecht am Durchlauf fremde Daten in die PDFs rendern lassen."""
+	for key, entry in values.items():
+		field = record_fields.get(key)
+		if not field:
+			continue
+		names = _record_names(entry.get("value"), field["type"], field["label"] or key)
+		for name in names:
+			doctype = field.get("reference_doctype") or ""
+			if not doctype or not frappe.db.exists(doctype, name):
+				frappe.throw(_("{0} {1} für Variable {2} existiert nicht.").format(_(doctype), frappe.bold(name), frappe.bold(field["label"] or key)))
+			if not frappe.has_permission(doctype, "read", doc=name):
+				frappe.throw(
+					_("Keine Leseberechtigung für {0} {1} (Variable {2}).").format(_(doctype), frappe.bold(name), frappe.bold(field["label"] or key)),
+					frappe.PermissionError,
+				)
+		entry["value"] = names if field["type"] == "Doctype Liste" else (names[0] if names else "")
+
+
 def _apply_context_overrides(context, template=None, run=None):
 	fields = input_fields(template, run, include_records=True) if template else context_fields(run)
 	types = {field["name"]: field["type"] for field in fields}
@@ -4216,7 +4256,9 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 		dok_by_objekt[d.objekt] = d
 
 	template_doc = doc._run_template() if doc.vorlage else None
-	input_definitions = input_fields(template_doc, doc) if template_doc else context_fields(doc)
+	input_definitions = (
+		input_fields(template_doc, doc, include_records=True) if template_doc else context_fields(doc)
+	)
 	recipients: List[Dict[str, Any]] = []
 	overrides_out: Dict[str, Dict[str, Any]] = {}
 	for it in doc.get("iteration_objekte") or []:
@@ -4235,7 +4277,10 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 				context = doc._build_context(row, len(recipients) + 1, template=template_doc, strict_variables=False)
 				for field in input_definitions:
 					value = _resolve_value_path(field["path"], context)
-					if isinstance(value, (str, bool, int, float)) or value is None:
+					if field["type"] in RECORD_TYPES:
+						# Datensätze als Namen anzeigen, wie sie auch gewählt werden.
+						value = _record_display_value(value)
+					if isinstance(value, (str, bool, int, float, list)) or value is None:
 						resolved_values[field["name"]] = value
 
 		except Exception:
@@ -4285,7 +4330,7 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 			key = field["name"]
 			entry = global_values.get(key) or {}
 			value = entry.get("value") if entry.get("value") is not None else field["default"]
-			variables_out.append({"name": key, "label": field["label"], "type": field["type"], "desc": field["description"], "default": field["default"], "value": value, "path": field["path"]})
+			variables_out.append({"name": key, "label": field["label"], "type": field["type"], "desc": field["description"], "default": field["default"], "value": value, "path": field["path"], "reference_doctype": field.get("reference_doctype") or ""})
 		known_keys = {item["name"] for item in variables_out}
 		for assignment in template_doc.get("variablenbelegungen") or []:
 			label = cstr(getattr(assignment, "bezeichnung", "") or "").strip()
@@ -4353,6 +4398,7 @@ def set_run_variables(
 	if doc.get("status") == "Läuft":
 		frappe.throw(_("Der Durchlauf läuft gerade. Bitte warten Sie bis zum Abschluss."))
 
+	record_fields = _record_input_fields(doc)
 	if variables is not None:
 		if isinstance(variables, str):
 			variables = json.loads(variables or "[]")
@@ -4360,6 +4406,7 @@ def set_run_variables(
 			(v.get("name"), v.get("value")) for v in variables
 		]
 		vw = {cstr(k): {"value": val} for k, val in items if k and val is not None}
+		_validate_record_inputs(vw, record_fields)
 		doc.variablen_werte = json.dumps(vw) if vw else ""
 
 	if per_recipient_overrides is not None:
@@ -4369,6 +4416,7 @@ def set_run_variables(
 			objekt = cstr(getattr(it, "objekt", "") or "")
 			ov = (per_recipient_overrides or {}).get(objekt) or {}
 			ovw = {cstr(k): {"value": val} for k, val in ov.items() if val is not None}
+			_validate_record_inputs(ovw, record_fields)
 			it.variablen_werte = json.dumps(ovw) if ovw else ""
 
 	# Normal speichern statt db.set_value: die Änderungshistorie (track_changes) zeigt

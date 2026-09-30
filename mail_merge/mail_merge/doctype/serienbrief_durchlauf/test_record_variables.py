@@ -158,3 +158,34 @@ class TestRecordVariablesInEditor(RecordFixtures):
 		self.readable = False
 		defaults = _preview_defaults_for_template(self.template({"anwalt": {"value": "K1"}}), base_context={})
 		self.assertNotIn("anwalt", defaults)
+
+
+class TestRecordVariablesInRun(RecordFixtures):
+	"""Datensatz pro Durchlauf/Empfänger: nur existierende, lesbare Datensätze speichern."""
+
+	fields = {
+		"anwalt": {"name": "anwalt", "label": "Anwalt", "type": "Doctype", "reference_doctype": "Contact"},
+		"kopie": {"name": "kopie", "label": "Kopie an", "type": "Doctype Liste", "reference_doctype": "Contact"},
+	}
+
+	def test_saved_run_values_are_normalised_and_checked(self):
+		values = {"anwalt": {"value": " K2 "}, "kopie": {"value": '["K1", "K2"]'}, "hinweis": {"value": "frei"}}
+		core._validate_record_inputs(values, self.fields)
+		self.assertEqual(values, {"anwalt": {"value": "K2"}, "kopie": {"value": ["K1", "K2"]}, "hinweis": {"value": "frei"}})
+		empty = {"anwalt": {"value": ""}}
+		core._validate_record_inputs(empty, self.fields)
+		self.assertEqual(empty, {"anwalt": {"value": ""}})
+
+	def test_run_values_reject_unknown_or_unreadable_records(self):
+		with self.assertRaises(frappe.ValidationError):
+			core._validate_record_inputs({"anwalt": {"value": "UNBEKANNT"}}, self.fields)
+		self.readable = False
+		with self.assertRaises(frappe.PermissionError):
+			core._validate_record_inputs({"kopie": {"value": ["K1"]}}, self.fields)
+
+	def test_loaded_records_are_shown_by_name(self):
+		run, context = self.run_context()
+		run._apply_template_variables(context, self.template({"anwalt": {"value": "K1"}}))
+		self.assertEqual(core._record_display_value(context.anwalt), "K1")
+		self.assertEqual(core._record_display_value([context.anwalt]), ["K1"])
+		self.assertEqual(core._record_display_value("text"), "text")

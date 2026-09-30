@@ -311,6 +311,22 @@
   font-family: var(--font-mono);
 }
 .dl-var-input:focus { outline: none; border-color: var(--border-focus); background: var(--surface); }
+.dl-record { position: relative; }
+.dl-record-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+.dl-record-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; overflow-wrap: anywhere;
+  font-size: 12px; padding: 2px 4px 2px 8px; border: 1px solid var(--border-focus);
+  border-radius: var(--radius-sm); background: var(--surface);
+}
+.dl-record-chip button { border: 0; background: transparent; color: var(--text-faint); padding: 0 4px; cursor: pointer; }
+.dl-record-results { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.dl-record-results button {
+  display: flex; justify-content: space-between; gap: 8px; text-align: left;
+  font-size: 12px; padding: 4px 8px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface-2); cursor: pointer;
+}
+.dl-record-results button:hover { border-color: var(--border-focus); }
+.dl-record-results small { color: var(--text-faint); }
 
 /* ============== Center: Recipient list ============== */
 .dl-recipients {

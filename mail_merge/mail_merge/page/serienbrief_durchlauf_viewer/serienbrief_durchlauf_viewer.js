@@ -25,6 +25,8 @@ const RPC_ACTIONS = {
 	add_recipients: HV_DL + "add_recipients",
 	remove_recipients: HV_DL + "remove_recipients",
 	available_recipients: HV_DL + "get_available_recipients",
+	// Fester Datensatz für Doctype-Variablen; listet nur Lesbares (frappe.get_list).
+	record_search: "mail_merge.mail_merge.doctype.serienbrief_vorlage.serienbrief_vorlage.get_editor_recipients",
 	merged_pdf: HV_DL + "get_merged_pdf",
 	create: HV_DL + "create_durchlauf",
 	update: HV_DL + "update_durchlauf",
