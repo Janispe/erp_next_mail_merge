@@ -139,3 +139,32 @@ class TestVersionenFestschreiben(IntegrationTestCase):
 		name = versioning.ensure_current_version(tbv.SPEC, frappe.get_doc("Serienbrief Textbaustein", block.name), seal=True)
 		self.assertNotEqual(name, latest.name)
 		self.assertTrue(frappe.db.get_value("Serienbrief Textbausteinversion", name, "sealed"))
+
+	def test_stale_loaded_version_cannot_unseal(self):
+		block = self._block("Veraltet", "<p>eins</p>")
+		self._edit(block, "<p>zwei</p>")
+		v2 = self._block_versions(block)[-1].name
+		stale = frappe.get_doc("Serienbrief Textbausteinversion", v2)  # sealed = 0 im Speicher
+		template = self._template(f'<p>{{{{ baustein("{block.name}") }}}}</p>')
+		template.baustein_versionen = json.dumps({block.name: 2})
+		template.save(ignore_permissions=True)
+
+		# Bezeichnung ueber das veraltet geladene Dokument aendern (wie update_version_metadata).
+		versioning.update_version_metadata(stale, label="Freigabe")
+		self.assertTrue(frappe.db.get_value("Serienbrief Textbausteinversion", v2, "sealed"))
+
+		self._edit(block, "<p>drei</p>")
+		self.assertIn("zwei", frappe.db.get_value("Serienbrief Textbausteinversion", v2, "snapshot"))
+		self.assertEqual(frappe.db.get_value("Serienbrief Textbausteinversion", v2, "version_label"), "Freigabe")
+
+	def test_sealed_version_refuses_session_refresh(self):
+		block = self._block("Auffrischen", "<p>eins</p>")
+		self._edit(block, "<p>zwei</p>")
+		v2 = self._block_versions(block)[-1].name
+		versioning.seal_version(tbv.SPEC, v2)
+
+		version = frappe.get_doc("Serienbrief Textbausteinversion", v2)
+		version.flags.allow_session_refresh = True
+		version.snapshot = version.snapshot.replace("zwei", "manipuliert")
+		with self.assertRaises(frappe.ValidationError):
+			version.save(ignore_permissions=True)

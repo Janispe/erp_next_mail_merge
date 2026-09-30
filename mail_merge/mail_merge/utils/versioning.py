@@ -502,6 +502,7 @@ class ImmutableVersionDocument(Document):
 	def validate(self):
 		if self.is_new() or not self.name:
 			return
+		self._keep_sealed()
 		if self.flags.get("allow_session_refresh"):
 			return
 		stored = frappe.db.get_value(self.doctype, self.name, self._IMMUTABLE_FIELDS, as_dict=True)
@@ -513,6 +514,21 @@ class ImmutableVersionDocument(Document):
 					_("Der Snapshot einer Version ist unveraenderlich. Nur Bezeichnung und Schutzstatus duerfen geaendert werden."),
 					frappe.ValidationError,
 				)
+
+	def _keep_sealed(self):
+		"""Festschreiben ist einseitig.
+
+		Ein vor dem Festschreiben geladenes Dokument traegt noch ``sealed = 0`` und wuerde
+		es beim Speichern (z. B. Bezeichnung aendern) zuruecksetzen. Massgeblich ist deshalb
+		der gesperrt gelesene Datenbankstand.
+		"""
+		if not self.meta.has_field("sealed"):
+			return
+		if not cint(frappe.db.get_value(self.doctype, self.name, "sealed", for_update=True)):
+			return
+		if self.flags.get("allow_session_refresh"):
+			frappe.throw(_("Eine festgeschriebene Version kann nicht mehr aufgefrischt werden."))
+		self.sealed = 1
 
 	def on_trash(self):
 		if cint(self.is_protected):
