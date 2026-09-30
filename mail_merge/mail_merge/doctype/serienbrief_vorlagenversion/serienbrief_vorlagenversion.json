@@ -10,6 +10,8 @@
   "version_label",
   "source",
   "change_summary",
+  "assistant_created",
+  "based_on",
   "is_protected",
   "restored_from",
   "content_hash",
@@ -45,7 +47,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Art",
-   "options": "Gespeichert\nAusgangsstand\nWiederherstellung\nImport\nSystemänderung"
+   "options": "Gespeichert\nAusgangsstand\nWiederherstellung\nImport\nSystemänderung\nKI-Erstellung\nKI-Vorschlag"
   },
   {
    "fieldname": "change_summary",
@@ -86,6 +88,20 @@
    "fieldtype": "Long Text",
    "label": "Baustein-Stückliste (JSON)",
    "read_only": 1
+  },
+  {
+   "fieldname": "based_on",
+   "fieldtype": "Link",
+   "label": "KI-Vorschlag basiert auf",
+   "options": "Serienbrief Vorlagenversion",
+   "read_only": 1
+  },
+  {
+   "fieldname": "assistant_created",
+   "fieldtype": "Check",
+   "label": "Vom Assistenten erstellt",
+   "read_only": 1,
+   "default": "0"
   }
  ],
  "index_web_pages_for_search": 0,

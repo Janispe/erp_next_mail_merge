@@ -8,7 +8,8 @@ export function buildVersionGraph(items, allItems = items) {
   const visibleByName = new Map(items.map((item, index) => [item.name, index]));
   const allByName = new Map(allItems.map((item) => [item.name, item]));
   const nodes = items.map((item, index) => {
-    const restoredFrom = item.restored_from ? allByName.get(item.restored_from) : null;
+    const originName = item.based_on || item.restored_from;
+    const restoredFrom = originName ? allByName.get(originName) : null;
     return {
       item,
       y: NODE_Y_OFFSET + (index * ROW_HEIGHT),
@@ -16,10 +17,11 @@ export function buildVersionGraph(items, allItems = items) {
     };
   });
   const restoreEdges = nodes.flatMap((node) => {
-    const sourceIndex = visibleByName.get(node.item.restored_from);
+    const originName = node.item.based_on || node.item.restored_from;
+    const sourceIndex = visibleByName.get(originName);
     if (sourceIndex === undefined) return [];
     return [{
-      source: node.item.restored_from,
+      source: originName,
       target: node.item.name,
       sourceY: NODE_Y_OFFSET + (sourceIndex * ROW_HEIGHT),
       targetY: node.y,
@@ -86,10 +88,12 @@ export const VersionHistoryGraph = ({
                 <span className="version-number">V{item.number}</span>
                 <span className="version-graph-title">{item.label || item.source}</span>
                 {item.protected && <Icon name="star" size={11} title="Geschützte Version"/>}
+                {item.assistant_created && <span className="version-graph-current">KI</span>}
+                {item.is_proposal && <span className="version-graph-current">Vorschlag · nicht aktiv</span>}
                 {item.is_current && <span className="version-graph-current">Aktuell</span>}
               </span>
               {restoredFromNumber && (
-                <span className="version-graph-origin"><Icon name="branch" size={11}/> Wiederhergestellt aus V{restoredFromNumber}</span>
+                <span className="version-graph-origin"><Icon name="branch" size={11}/> {item.based_on ? "Vorschlag auf Basis von" : "Wiederhergestellt aus"} V{restoredFromNumber}</span>
               )}
               {!restoredFromNumber && <span className="version-list-summary">{item.change_summary || "Gespeicherter Stand"}</span>}
               <span className="version-list-meta">{formatDate(item.created)} · {displayUser(item.created_by)}</span>

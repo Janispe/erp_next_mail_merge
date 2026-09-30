@@ -19,7 +19,7 @@ import frappe
 from frappe.database.database import Database
 from frappe.model.base_document import BaseDocument
 from frappe.utils.jinja import get_jenv
-from frappe.utils.safe_exec import NamespaceDict, read_sql
+from frappe.utils.safe_exec import SAFE_DATA_UTILS, NamespaceDict, read_sql
 from jinja2.defaults import DEFAULT_FILTERS
 
 _FRAPPE_READ = (
@@ -132,6 +132,16 @@ def _readonly_frappe(safe_frappe) -> ReadonlyNamespace:
 	values.update({key: value for key, value in safe_frappe.items() if key[:1].isupper()})
 	db = {key: safe_frappe["db"][key] for key in _DB_READ if key in safe_frappe["db"]}
 	db["sql"] = read_sql
+	# image_to_base64 calls its argument's save() outside the sandbox.
+	# No object/file conversion helpers are exposed to brief source.
+	values["utils"] = ReadonlyNamespace(
+		"frappe.utils",
+		{
+			key: value
+			for key, value in SAFE_DATA_UTILS.items()
+			if key not in {"image_to_base64", "pdf_to_base64", "get_thumbnail_base64_for_image"}
+		},
+	)
 	values["db"] = ReadonlyNamespace("frappe.db", db)
 	return ReadonlyNamespace("frappe", values)
 

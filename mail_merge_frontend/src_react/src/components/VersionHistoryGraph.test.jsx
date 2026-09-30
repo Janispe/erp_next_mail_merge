@@ -18,6 +18,14 @@ describe("buildVersionGraph", () => {
     expect(graph.nodes[0].restoredFromNumber).toBe(1);
   });
 
+  it("connects a proposal to its basis without marking it as current", () => {
+    const proposal = { name: "proposal", number: 5, based_on: "version-3", is_proposal: true };
+    const graph = buildVersionGraph([proposal, ...versions]);
+    expect(graph.restoreEdges).toContainEqual(expect.objectContaining({ source: "version-3", target: "proposal" }));
+    expect(graph.nodes[0].restoredFromNumber).toBe(3);
+    expect(graph.nodes[0].item.is_current).toBeUndefined();
+  });
+
   it("keeps origin metadata when a search hides the source node", () => {
     const graph = buildVersionGraph([versions[0]], versions);
 

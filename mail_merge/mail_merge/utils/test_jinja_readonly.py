@@ -67,6 +67,7 @@ class TestJinjaReadonly(IntegrationTestCase):
 			"{{ _getattr_(objekt, 'save')() }}",
 			"{{ log('x') }}",
 			"{{ frappe.log_error('x') }}",
+			"{{ frappe.utils.image_to_base64(objekt, 'png') }}",
 		):
 			self._blocked(template)
 

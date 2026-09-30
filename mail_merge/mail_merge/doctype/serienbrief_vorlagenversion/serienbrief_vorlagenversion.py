@@ -10,6 +10,8 @@ class SerienbriefVorlagenversion(ImmutableVersionDocument):
 		"source",
 		"change_summary",
 		"restored_from",
+		"based_on",
+		"assistant_created",
 		"content_hash",
 		"snapshot",
 		"textbaustein_versionen",

@@ -48,6 +48,7 @@ class VersionSpec:
 	# Nachtraeglich eingefuehrte Felder: nur gesetzt im Snapshot, damit bestehende
 	# Staende ihre Pruefsumme behalten. Beim Wiederherstellen fehlend = leer.
 	optional_scalar_fields: tuple[str, ...] = field(default_factory=tuple)
+	non_live_sources: tuple[str, ...] = field(default_factory=tuple)
 
 
 def version_doctype_available(spec: VersionSpec) -> bool:
@@ -73,7 +74,7 @@ def build_snapshot(spec: VersionSpec, doc) -> Dict[str, Any]:
 	for fieldname in spec.scalar_fields:
 		snapshot[fieldname] = doc.get(fieldname)
 	for fieldname in spec.optional_scalar_fields:
-		if doc.get(fieldname) not in (None, ""):
+		if doc.get(fieldname) not in (None, "", 0):
 			snapshot[fieldname] = doc.get(fieldname)
 	for fieldname in spec.child_fields:
 		snapshot[fieldname] = [snapshot_child_row(row) for row in (doc.get(fieldname) or [])]
@@ -110,10 +111,17 @@ def apply_snapshot(spec: VersionSpec, doc, snapshot: Dict[str, Any]) -> None:
 			doc.set(fieldname, [dict(row) for row in rows if isinstance(row, dict)])
 
 
+def _live_filters(spec: VersionSpec, owner_name: str):
+	filters = {spec.owner_field: owner_name}
+	if spec.non_live_sources:
+		filters["source"] = ["not in", list(spec.non_live_sources)]
+	return filters
+
+
 def latest_version(spec: VersionSpec, owner_name: str):
 	rows = frappe.get_all(
 		spec.version_doctype,
-		filters={spec.owner_field: owner_name},
+		filters=_live_filters(spec, owner_name),
 		fields=[
 			"name", "version_number", "version_label", "source", "is_protected",
 			"restored_from", "content_hash", "snapshot", "creation", "modified", "owner",
@@ -154,7 +162,7 @@ def can_coalesce(
 def _refresh_session_version(spec: VersionSpec, doc, latest, snapshot: Dict[str, Any], content_hash: str):
 	previous_rows = frappe.get_all(
 		spec.version_doctype,
-		filters={spec.owner_field: doc.name, "version_number": ["<", latest.version_number]},
+		filters={**_live_filters(spec, doc.name), "version_number": ["<", latest.version_number]},
 		fields=["snapshot"],
 		order_by="version_number desc",
 		limit=1,
@@ -181,6 +189,7 @@ def create_version(
 	label: str = "",
 	restored_from: str = "",
 	force: bool = False,
+	based_on: str = "",
 ):
 	"""Legt Meilensteine an und fasst schnelle, unbenannte Speicherungen zusammen."""
 	if not doc or not doc.name or not version_doctype_available(spec):
@@ -194,14 +203,24 @@ def create_version(
 	latest = latest_version(spec, doc.name)
 	if latest and latest.content_hash == content_hash and not force:
 		return latest.name
-	if can_coalesce(latest, source=source, label=label, restored_from=restored_from, force=force):
+	coalesce = can_coalesce(latest, source=source, label=label, restored_from=restored_from, force=force)
+	if coalesce and spec.non_live_sources and frappe.db.exists(spec.version_doctype, {"based_on": latest.name}):
+		coalesce = False
+	if coalesce:
 		return _refresh_session_version(spec, doc, latest, snapshot, content_hash)
 
 	previous = parse_snapshot(spec, latest.snapshot) if latest else None
+	if based_on:
+		base = require_version(spec, based_on, doc.name)
+		previous = parse_snapshot(spec, base.snapshot)
+	# Vorschläge zählen für eindeutige Nummern, aber niemals als Live-Stand.
+	last_number = frappe.db.get_value(
+		spec.version_doctype, {spec.owner_field: doc.name}, "version_number", order_by="version_number desc"
+	)
 	values = {
 		"doctype": spec.version_doctype,
 		spec.owner_field: doc.name,
-		"version_number": cint(latest.version_number) + 1 if latest else 1,
+		"version_number": cint(last_number) + 1,
 		"version_label": cstr(label).strip(),
 		"source": cstr(source).strip() or "Gespeichert",
 		"change_summary": ", ".join(spec.change_sections(previous, snapshot)),
@@ -209,6 +228,10 @@ def create_version(
 		"content_hash": content_hash,
 		"snapshot": snapshot_json(snapshot),
 	}
+	if spec.non_live_sources:
+		values["assistant_created"] = int(bool(doc.get("assistant_created")))
+		values["based_on"] = based_on or None
+		values["is_protected"] = int(source in spec.non_live_sources)
 	if spec.extra_version_fields:
 		values.update(spec.extra_version_fields(doc) or {})
 	version = frappe.get_doc(values)
@@ -260,6 +283,9 @@ def version_metadata(version, *, current_hash: str = "", current_version: str = 
 		"change_summary": cstr(version.change_summary or ""),
 		"protected": bool(cint(version.is_protected)),
 		"restored_from": cstr(version.restored_from or ""),
+		"based_on": cstr(version.get("based_on") or ""),
+		"assistant_created": bool(version.get("assistant_created")) or cstr(version.source).startswith("KI-"),
+		"is_proposal": version.source == "KI-Vorschlag",
 		"content_hash": cstr(version.content_hash or ""),
 		"is_current": bool(
 			current_hash
@@ -293,10 +319,11 @@ def delete_block_reason(
 	return ""
 
 
-def rows_with_delete_metadata(rows, *, current_hash: str, current_version: str, evidence_names=frozenset()):
-	latest_name = rows[0].name if rows else ""
-	first_name = rows[-1].name if rows else ""
-	referenced_names = {cstr(row.restored_from).strip() for row in rows if cstr(row.restored_from).strip()}
+def rows_with_delete_metadata(rows, *, current_hash: str, current_version: str, evidence_names=frozenset(), non_live_sources=()):
+	live = [row for row in rows if row.source not in non_live_sources]
+	latest_name = live[0].name if live else ""
+	first_name = live[-1].name if live else ""
+	referenced_names = {cstr(row.get(key)).strip() for row in rows for key in ("restored_from", "based_on") if row.get(key)}
 	items = []
 	for row in rows:
 		item = version_metadata(row, current_hash=current_hash, current_version=current_version)
@@ -324,17 +351,20 @@ def list_versions(spec: VersionSpec, doc, *, evidence_names=frozenset()) -> Dict
 		fields=[
 			"name", "version_number", "version_label", "source", "change_summary",
 			"is_protected", "restored_from", "content_hash", "creation", "owner",
+			*(["based_on", "assistant_created"] if spec.non_live_sources else []),
 		],
 		order_by="version_number desc",
 		limit_page_length=0,
 	)
-	current_version = rows[0].name if rows and rows[0].content_hash == current_hash else ""
+	live = [row for row in rows if row.source not in spec.non_live_sources]
+	current_version = live[0].name if live and live[0].content_hash == current_hash else ""
 	return {
 		"items": rows_with_delete_metadata(
 			rows,
 			current_hash=current_hash,
 			current_version=current_version,
 			evidence_names=evidence_names,
+			non_live_sources=spec.non_live_sources,
 		),
 		"current_hash": current_hash,
 	}
@@ -354,15 +384,16 @@ def delete_version(spec: VersionSpec, version, owner_name: str, *, evidence_name
 	rows = frappe.get_all(
 		spec.version_doctype,
 		filters={spec.owner_field: owner_name},
-		fields=["name", "source", "is_protected", "restored_from"],
+		fields=["name", "source", "is_protected", "restored_from", *(["based_on"] if spec.non_live_sources else [])],
 		order_by="version_number desc",
 		limit_page_length=0,
 	)
+	live = [row for row in rows if row.source not in spec.non_live_sources]
 	reason = delete_block_reason(
 		version,
-		latest_name=rows[0].name if rows else "",
-		first_name=rows[-1].name if rows else "",
-		referenced_names={cstr(row.restored_from).strip() for row in rows if cstr(row.restored_from).strip()},
+		latest_name=live[0].name if live else "",
+		first_name=live[-1].name if live else "",
+		referenced_names={cstr(row.get(key)).strip() for row in rows for key in ("restored_from", "based_on") if row.get(key)},
 		evidence_names=evidence_names,
 	)
 	if reason:

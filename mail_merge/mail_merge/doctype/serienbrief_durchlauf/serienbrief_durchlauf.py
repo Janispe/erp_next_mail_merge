@@ -362,11 +362,17 @@ def _preprocess_simple_paths(
 	if not template or "$" not in template:
 		return template
 
+	def display_token(value):
+		from markupsafe import escape
+
+		text = cstr(_display_value(value))
+		return cstr(escape(text)).replace("{", "&#123;").replace("}", "&#125;") if context.get("_serienbrief_assistant_content") else text
+
 	def _replace(match: "re.Match[str]") -> str:
 		path = match.group(1)
 		override = _get_value_override(context, _path_override_key(path))
 		if override is not None:
-			return cstr(_display_value(override))
+			return display_token(override)
 		try:
 			value = _resolve_value_path(path, context)
 		except Exception as exc:
@@ -387,7 +393,7 @@ def _preprocess_simple_paths(
 		# Document/Dict-ähnliches → Doc-Name (analog Frappe-Default).
 		if hasattr(value, "doctype") and getattr(value, "name", None):
 			return cstr(value.name)
-		return cstr(_display_value(value))
+		return display_token(value)
 
 	return _PLACEHOLDER_TOKEN_RE.sub(_replace, template)
 
@@ -428,6 +434,7 @@ def _render_serienbrief_template(template: str, context: Dict[str, Any]) -> str:
 	finalize = context.get("_serienbrief_finalize")
 	jenv = readonly_jenv(
 		undefined=StrictUndefined,
+		autoescape=bool(context.get("_serienbrief_assistant_content")),
 		finalize=finalize if callable(finalize) else _strict_finalize,
 	)
 	try:
@@ -1283,6 +1290,11 @@ class SerienbriefDurchlauf(Document):
 		"""Render die Vorlage in Segmenten: html und pdf."""
 
 		standard_text = _get_template_template_source(template).strip()
+		if template.get("assistant_created"):
+			from mail_merge.mail_merge.utils.assistant_templates import validate_assistant_source
+
+			validate_assistant_source(standard_text)
+			context["_serienbrief_assistant_content"] = True
 		content_position = cstr(getattr(template, "content_position", "")).strip() or "Nach Bausteinen"
 		inline_mode = bool(
 			standard_text and ("baustein(" in standard_text or "textbaustein(" in standard_text)
@@ -1365,8 +1377,17 @@ class SerienbriefDurchlauf(Document):
 						}
 					)
 
+		def validate_segments():
+			if context.get("_serienbrief_assistant_content"):
+				from mail_merge.mail_merge.utils.assistant_templates import validate_passive_html
+
+				for segment in segments:
+					if segment.get("type") == "html":
+						validate_passive_html(segment["html"])
+
 		if inline_mode:
 			render_standard()
+			validate_segments()
 			return segments
 
 		if content_position == "Vor Bausteinen":
@@ -1393,6 +1414,7 @@ class SerienbriefDurchlauf(Document):
 		if content_position != "Vor Bausteinen":
 			render_standard()
 
+		validate_segments()
 		return segments
 
 	def render_footer_blocks(self, template, footer_doc=None) -> str:
@@ -1474,7 +1496,7 @@ class SerienbriefDurchlauf(Document):
 		# Only declared inputs enter a block. Paths resolve against the parent.
 		block_context = frappe._dict(baustein=frappe._dict(key=block_key, name=block_doc.name, title=block_doc.title))
 		# Rendering callbacks are infrastructure, not inherited business values.
-		for key in ("frappe", "_serienbrief_finalize", "_serienbrief_on_unresolvable"):
+		for key in ("frappe", "_serienbrief_finalize", "_serienbrief_on_unresolvable", "_serienbrief_assistant_content"):
 			if key in base_context:
 				block_context[key] = base_context[key]
 		self._apply_block_variables(block_context, base_context, block_doc, block_row)

@@ -40,6 +40,9 @@ from mail_merge.mail_merge.utils.textbaustein_loader import (
 
 class SerienbriefVorlage(Document):
 	def validate(self):
+		previous = self.get_doc_before_save()
+		if previous and previous.get("assistant_created"):
+			self.assistant_created = 1
 		content_type = (getattr(self, "content_type", "") or "").strip() or "Textbaustein (Rich Text)"
 		self.content_type = content_type
 		self._ensure_baustein_keys()
@@ -214,7 +217,8 @@ TEMPLATE_VERSION_SPEC = versioning.VersionSpec(
 	child_fields=_VERSION_CHILD_FIELDS,
 	change_sections=_snapshot_change_sections,
 	extra_version_fields=_template_bill_fields,
-	optional_scalar_fields=("baustein_versionen",),
+	optional_scalar_fields=("baustein_versionen", "assistant_created"),
+	non_live_sources=("KI-Vorschlag",),
 )
 
 
@@ -2913,6 +2917,8 @@ def save_editor_template(
 	if new_title and new_title != cstr(doc.title).strip():
 		doc.title = new_title
 	if restored_version:
+		if restored_version.get("assistant_created") or cstr(restored_version.get("source")).startswith("KI-"):
+			doc.assistant_created = 1
 		# Erst der explizite Speichervorgang erzeugt die neue Version samt Herkunftskante.
 		doc.flags.version_source = "Wiederherstellung"
 		doc.flags.version_restored_from = restored_version.name

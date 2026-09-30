@@ -364,7 +364,7 @@ export const VersionHistoryModal = ({
               <>
                 <div className="version-detail-head">
                   <div>
-                    <div className="version-detail-kicker">Version {selected.number} {selected.is_current && <span>Aktueller Stand</span>}</div>
+                    <div className="version-detail-kicker">Version {selected.number} {selected.assistant_created && <span>KI</span>} {selected.is_proposal && <span>Vorschlag · nicht aktiv</span>} {selected.is_current && <span>Aktueller Stand</span>}</div>
                     <div className="version-detail-date">{formatDate(selected.created)} von {displayUser(selected.created_by)}</div>
                   </div>
                   <div className="version-detail-actions">
