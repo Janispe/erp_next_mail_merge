@@ -9,6 +9,7 @@ import { BausteinPopover } from "./components/BausteinPopover.jsx";
 import { DynamicPreviewPopover } from "./components/DynamicPreviewPopover.jsx";
 import { JinjaTokenPopover } from "./components/JinjaTokenPopover.jsx";
 import { VersionHistoryModal } from "./components/VersionHistoryModal.jsx";
+import { recordVariableRoots } from "./components/recordVariables.js";
 import { CURRENT_TEMPLATE, TEMPLATE_TREE } from "./data.js";
 import {
   loadTree, loadTemplate, saveTemplate, copyTemplate, deleteTemplate, openDurchlauf,
@@ -563,6 +564,13 @@ export const App = () => {
     return out;
   }, [placeholders, advancedPlaceholders]);
 
+  // Baustein-Pfade dürfen auch bei Doctype-Variablen der Vorlage beginnen
+  // (fest gewählter Datensatz, z. B. Briefkopf address -> anwalt_adresse).
+  const mappingPaths = useMemo(
+    () => [...recordVariableRoots(variables), ...placeholderPaths],
+    [variables, placeholderPaths],
+  );
+
   // Pfad-Mapping und Vorlagenvariablen benötigen bei Bedarf auch seltene Pfade.
   // Der große Baum wird erst beim Öffnen dieser Werkzeuge nachgeladen.
   useEffect(() => {
@@ -1101,7 +1109,7 @@ export const App = () => {
           baustein={mappingBaustein}
           hauptVerteilObjekt={template.haupt_verteil_objekt}
           existingOverrides={bausteinPaths[mappingBaustein.name] || {}}
-          placeholderPaths={placeholderPaths}
+          placeholderPaths={mappingPaths}
           onClose={() => setMappingBaustein(null)}
           onSave={(name, clean) => {
             setBausteinPaths((prev) => {

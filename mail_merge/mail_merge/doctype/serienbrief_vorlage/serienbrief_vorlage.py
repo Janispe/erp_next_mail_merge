@@ -1224,6 +1224,8 @@ def _preview_defaults_for_template(
 	Variant in ``_preview_defaults_for_block``).
 	"""
 	from mail_merge.mail_merge.doctype.serienbrief_durchlauf.serienbrief_durchlauf import (
+		RECORD_TYPES,
+		_load_record_value,
 		_parse_mapping,
 		_parse_variable_values,
 		_resolve_value_path,
@@ -1250,6 +1252,19 @@ def _preview_defaults_for_template(
 		entry = mapping.get(key) or {}
 		path = cstr(entry.get("path") or "").strip()
 		value = entry.get("value")
+
+		if variable_type in RECORD_TYPES and value not in (None, ""):
+			# Fest gewählter Datensatz wie im Durchlauf; Fehler (fehlt, kein Recht)
+			# zeigt die Vorschau wie unauflösbare Pfade als fehlenden Wert.
+			try:
+				record = _load_record_value(value, getattr(row, "reference_doctype", None), variable_type, varname)
+			except Exception:
+				record = None
+			if record is not None:
+				defaults[key] = record
+				continue
+			# Den Datensatz-Namen nie als Text einsetzen.
+			value = None
 
 		# Doctype-Variablen: ggf. Fallback-Pfad aus pfad_zuordnung.
 		if not is_text_like and not path:
@@ -2810,8 +2825,15 @@ def _apply_editor_variables(doc, variables) -> None:
 			if val not in (None, ""):
 				werte[key] = {"value": val}
 		else:
+			# Doctype-Variablen: fest gewählter Datensatz (Name bzw. Namensliste)
+			# oder Pfad ab dem Objekt — nie beides.
+			record = d.get("value")
+			if isinstance(record, str):
+				record = record.strip()
 			p = cstr(d.get("path")).strip()
-			if p:
+			if record not in (None, "", []):
+				werte[key] = {"value": record}
+			elif p:
 				pfade[key] = p
 	doc.set("variables", rows)
 	doc.variablen_werte = frappe.as_json(werte) if werte else ""

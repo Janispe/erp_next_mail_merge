@@ -1,6 +1,11 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { Icon } from "./Icon.jsx";
 import { loadPref, savePref } from "../persist.js";
+import { loadRecipients } from "../api.js";
+import {
+  applyAssignmentEntry, assignmentEntry, isRecordType, recordNames, switchVariableSource,
+  variableSource, withRecord, withoutRecord,
+} from "./recordVariables.js";
 
 // base64-PDF → Blob-URL (vermeidet riesige data:-URIs / CSP-Probleme)
 function usePdfUrl(base64) {
@@ -740,7 +745,7 @@ const BausteinePane = ({
 // Variables pane (editierbar: anlegen/löschen, Typ + Wert/Pfad)
 // =========================
 const VAR_TYPES = ["Text", "String", "Zahl", "Bool", "Datum", "Doctype", "Doctype Liste"];
-const isDoctypeType = (t) => t === "Doctype" || t === "Doctype Liste";
+const isDoctypeType = isRecordType;
 
 const boolSelectValue = (value) => {
   if (value === true || value === 1 || ["true", "1", "yes", "on", "ja", "wahr"].includes(String(value).toLowerCase())) return "1";
@@ -757,7 +762,7 @@ const captureVariableAssignment = (vars) => {
   for (const v of vars || []) {
     const key = scrubName(v.variable);
     if (!key) continue;
-    if (isDoctypeType(v.type)) values[key] = { path: v.path || "" };
+    if (isDoctypeType(v.type)) values[key] = assignmentEntry(v);
     else values[key] = { value: v.value ?? "" };
   }
   return values;
@@ -768,9 +773,98 @@ const applyVariableAssignment = (vars, profile) => {
   return (vars || []).map((v) => {
     const entry = values[scrubName(v.variable)] || {};
     return isDoctypeType(v.type)
-      ? { ...v, path: entry.path ?? "" }
+      ? applyAssignmentEntry(v, entry)
       : { ...v, value: entry.value ?? "" };
   });
+};
+
+// Fester Datensatz für eine Doctype-Variable: Suche über die Empfänger-Suche des
+// Editors (liest nur, was der Benutzer lesen darf). "Doctype Liste" sammelt mehrere.
+const RecordPicker = ({ variable, onChange, disabled }) => {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState([]);
+  const [error, setError] = useState("");
+  const doctype = String(variable.reference_doctype || "").trim();
+  const names = recordNames(variable.value);
+
+  useEffect(() => {
+    if (!open || !doctype) return undefined;
+    let alive = true;
+    const timer = setTimeout(() => {
+      loadRecipients(doctype, query)
+        .then((result) => {
+          if (!alive) return;
+          setItems(result?.items || []);
+          setError("");
+        })
+        .catch((err) => {
+          if (!alive) return;
+          setItems([]);
+          setError(err?.message || "Suche fehlgeschlagen");
+        });
+    }, 200);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [open, doctype, query]);
+
+  const choose = (item) => {
+    onChange(withRecord(variable, item.id));
+    setQuery("");
+    setOpen(false);
+  };
+
+  return (
+    <div className="var-record">
+      {names.length > 0 && (
+        <div className="var-record-chips">
+          {names.map((name) => (
+            <span key={name} className="var-record-chip" title={`${doctype} ${name}`}>
+              {name}
+              <button onClick={() => onChange(withoutRecord(variable, name))} disabled={disabled} aria-label={`${name} entfernen`}>
+                <Icon name="x" size={10} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {(variable.type === "Doctype Liste" || names.length === 0) && (
+        <div className="path-picker">
+          <input
+            className="var-edit-sub"
+            placeholder={doctype ? `${doctype} suchen…` : "Erst Referenz-Doctype eintragen"}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setTimeout(() => setOpen(false), 150)}
+            disabled={disabled || !doctype}
+            spellCheck={false}
+          />
+          {open && (items.length > 0 || error) && (
+            <div className="path-picker-suggestions">
+              {error && <div className="path-picker-label">{error}</div>}
+              {items.filter((item) => !names.includes(item.id)).map((item) => (
+                <button
+                  key={item.id}
+                  className="path-suggestion"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    choose(item);
+                  }}
+                  title={item.id}
+                >
+                  <span>{item.label}</span>
+                  {item.label !== item.id && <span className="path-type">{item.id}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 };
 
 const VariablesPane = ({
@@ -836,7 +930,7 @@ const VariablesPane = ({
   return (
     <div className="var-pane">
       <div style={{ marginBottom: 10, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
-        Vorlagen-Variablen: anlegen, Typ + Wert (Text) bzw. Pfad (Doctype) setzen. Im Brief via{" "}
+        Vorlagen-Variablen: anlegen, Typ + Wert (Text) bzw. Pfad oder festen Datensatz (Doctype) setzen. Im Brief via{" "}
         <code>{"{{ name }}"}</code> nutzbar. Speichern oben rechts.
       </div>
       <div className="var-profile-box">
@@ -918,15 +1012,35 @@ const VariablesPane = ({
                   spellCheck={false}
                   disabled={!editable}
                 />
-                <input
-                  className="var-edit-sub var-edit-path"
-                  list="hv-var-path-suggestions"
-                  placeholder="Pfad, z. B. objekt.objekt.standort"
-                  value={v.path || ""}
-                  onChange={(e) => update(i, { path: e.target.value })}
-                  spellCheck={false}
-                  disabled={!editable}
-                />
+                <div className="var-source-toggle" role="group" aria-label="Quelle der Variable">
+                  {[["path", "Pfad ab Objekt"], ["record", "Fester Datensatz"]].map(([source, label]) => (
+                    <button
+                      key={source}
+                      className={variableSource(v) === source ? "is-active" : ""}
+                      onClick={() => variableSource(v) !== source && onChange && onChange(vars.map((item, idx) => (idx === i ? switchVariableSource(item, source) : item)))}
+                      disabled={!editable}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {variableSource(v) === "record" ? (
+                  <RecordPicker
+                    variable={v}
+                    onChange={(next) => onChange && onChange(vars.map((item, idx) => (idx === i ? next : item)))}
+                    disabled={!editable}
+                  />
+                ) : (
+                  <input
+                    className="var-edit-sub var-edit-path"
+                    list="hv-var-path-suggestions"
+                    placeholder="Pfad, z. B. objekt.objekt.standort"
+                    value={v.path || ""}
+                    onChange={(e) => update(i, { path: e.target.value })}
+                    spellCheck={false}
+                    disabled={!editable}
+                  />
+                )}
               </>
             ) : v.type === "Bool" ? (
               <select

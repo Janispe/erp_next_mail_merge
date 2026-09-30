@@ -30,8 +30,8 @@ def record(doctype, name):
 	return frappe._dict(doctype=doctype, name=name, **RECORDS[(doctype, name)])
 
 
-class TestRecordVariables(unittest.TestCase):
-	"""Doctype-Variablen mit fest gewähltem Datensatz: laden, Links folgen, Vorrang, Rechte."""
+class RecordFixtures(unittest.TestCase):
+	"""Gemockte Kontakte/Adressen mit Link-Metadaten; keine Site-Daten."""
 
 	def setUp(self):
 		self.readable = True
@@ -58,6 +58,10 @@ class TestRecordVariables(unittest.TestCase):
 				frappe._dict(variable="hinweis", variable_type="Text", optional=1)],
 			variablen_werte=json.dumps(werte or {}),
 		)
+
+
+class TestRecordVariables(RecordFixtures):
+	"""Doctype-Variablen mit fest gewähltem Datensatz: laden, Links folgen, Vorrang, Rechte."""
 
 	def test_fixed_template_record_is_loaded_and_follows_links(self):
 		run, context = self.run_context()
@@ -124,3 +128,33 @@ class TestRecordVariables(unittest.TestCase):
 		self.assertTrue(fields["anwalt"]["required"])
 		with_path = self.template({"anwalt": {"path": "objekt.kunde"}})
 		self.assertFalse({f["name"]: f for f in input_fields(with_path, include_records=True)}["anwalt"]["required"])
+
+
+class FakeTemplateDoc(frappe._dict):
+	def set(self, key, value):
+		self[key] = value
+
+
+class TestRecordVariablesInEditor(RecordFixtures):
+	"""Editor-Speichern und Split-Vorschau behandeln den festen Datensatz wie der Durchlauf."""
+
+	def test_editor_saves_record_as_value_and_path_otherwise(self):
+		from mail_merge.mail_merge.doctype.serienbrief_vorlage.serienbrief_vorlage import _apply_editor_variables
+
+		doc = FakeTemplateDoc(variables=[])
+		_apply_editor_variables(doc, json.dumps([
+			{"variable": "anwalt", "type": "Doctype", "reference_doctype": "Contact", "value": " K1 ", "path": "objekt.kunde", "source": "record"},
+			{"variable": "empfaenger", "type": "Doctype Liste", "reference_doctype": "Contact", "value": [], "path": "objekt.mieter"},
+		]))
+		self.assertEqual(json.loads(doc.variablen_werte), {"anwalt": {"value": "K1"}})
+		self.assertEqual(json.loads(doc.pfad_zuordnung), {"empfaenger": "objekt.mieter"})
+		self.assertEqual([row["reference_doctype"] for row in doc.variables], ["Contact", "Contact"])
+
+	def test_split_preview_loads_record_and_never_uses_its_name_as_text(self):
+		from mail_merge.mail_merge.doctype.serienbrief_vorlage.serienbrief_vorlage import _preview_defaults_for_template
+
+		defaults = _preview_defaults_for_template(self.template({"anwalt": {"value": "K1"}}), base_context={})
+		self.assertEqual(defaults["anwalt"].first_name, "Raúl")
+		self.readable = False
+		defaults = _preview_defaults_for_template(self.template({"anwalt": {"value": "K1"}}), base_context={})
+		self.assertNotIn("anwalt", defaults)

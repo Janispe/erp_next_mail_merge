@@ -3932,6 +3932,20 @@ span[style*="color"] > .chip {
   color: var(--text-2);
 }
 .var-edit-path { font-family: var(--font-mono); font-size: 11.5px; }
+.var-source-toggle { display: flex; gap: 4px; margin-top: 6px; }
+.var-source-toggle button {
+  flex: 1; font-size: 11px; padding: 3px 6px; border: 1px solid var(--border);
+  border-radius: 4px; background: var(--surface-2); color: var(--text-2);
+}
+.var-source-toggle button.is-active { background: var(--primary-50); border-color: var(--primary); color: var(--primary-hover); }
+.var-record-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.var-record-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+  font-size: 11.5px; padding: 2px 4px 2px 8px; border: 1px solid var(--primary);
+  border-radius: 4px; background: var(--primary-50); overflow-wrap: anywhere;
+}
+.var-record-chip button { display: inline-flex; border: 0; background: transparent; color: var(--text-faint); padding: 2px; }
+.var-record-chip button:hover { color: var(--danger, #c0392b); }
 .var-edit-actions { margin-top: 6px; display: flex; justify-content: flex-end; align-items: center; gap: 10px; }
 .var-edit-optional { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-2); cursor: pointer; user-select: none; }
 .var-edit-optional input { margin: 0; }
