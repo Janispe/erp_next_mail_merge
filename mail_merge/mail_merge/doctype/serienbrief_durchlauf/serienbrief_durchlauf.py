@@ -31,7 +31,7 @@ from mail_merge.mail_merge.utils.serienbrief_fonts import (
 from mail_merge.mail_merge.utils.jinja_source_sanitizer import sanitize_richtext_jinja_source
 from mail_merge.mail_merge.utils.brand_print import apply_print_saving_brand_assets
 from mail_merge.mail_merge.utils.letter_composer_state import input_fingerprint
-from mail_merge.mail_merge.utils.render_inputs import context_fields, input_fields
+from mail_merge.mail_merge.utils.render_inputs import RECORD_TYPES, context_fields, input_fields
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import read_file_url_bytes
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import render_pdf_bytes_as_html_fragment
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import render_pdf_form_block
@@ -1850,14 +1850,22 @@ class SerienbriefDurchlauf(Document):
 				or cstr(default_paths.get(getattr(variable, "reference_doctype", None)) or "").strip()
 			)
 
-			resolved = None
-			path_was_set = bool(path)
+			# Ein fest gewählter Datensatz hat Vorrang vor Pfaden (auch Standardpfaden).
+			resolved = (
+				_load_record_value(value, getattr(variable, "reference_doctype", None), variable_type, raw_key)
+				if variable_type in RECORD_TYPES
+				else None
+			)
+			path_was_set = bool(path) and resolved is None
 			if variable_type == "Doctype Liste" and path and not path.endswith("[]"):
 				path = f"{path}[]"
-			if path:
+			if path and resolved is None:
 				# Pfade werden gegen den Parent-Context (mit ``objekt``)
 				# aufgelöst, nicht gegen den strict Block-Context.
 				resolved = _resolve_value_path(path, base_context)
+			if variable_type == "Doctype Liste" and _is_document_like(resolved):
+				# Ein einzelner Datensatz (z. B. Vorlagen-Variable ``anwalt``) als Liste.
+				resolved = [resolved]
 			if resolved is None and value is None:
 				if key in preview_defaults:
 					value = preview_defaults[key]
@@ -1930,14 +1938,26 @@ class SerienbriefDurchlauf(Document):
 			if not key:
 				continue
 
+			reference_doctype = getattr(variable, "reference_doctype", None)
 			override = (context.get("_serienbrief_value_overrides") or {}).get(key)
 			if _entry_has_explicit_value(override):
-				context[key] = _wrap_jinja_value(_coerce_context_value(override["value"], variable_type))
-				continue
+				if variable_type not in RECORD_TYPES:
+					context[key] = _wrap_jinja_value(_coerce_context_value(override["value"], variable_type))
+					continue
+				record = _load_record_value(override["value"], reference_doctype, variable_type, raw_key)
+				if record is not None:
+					context[key] = record
+					continue
 
 			entry = mapping.get(key) or {}
 			path = cstr(entry.get("path") or "").strip()
 			value = entry.get("value")
+			if variable_type in RECORD_TYPES:
+				# Ein fest gewählter Datensatz hat Vorrang vor Pfad und __self__.
+				record = _load_record_value(value, reference_doctype, variable_type, raw_key)
+				if record is not None:
+					context[key] = record
+					continue
 			if not is_text_like:
 				# Doctype / Doctype Liste: Pfad analog zu Bausteinen
 				path = (
@@ -2007,6 +2027,10 @@ class SerienbriefDurchlauf(Document):
 			value = entry.get("value")
 
 			resolved = value
+			if variable_type in RECORD_TYPES:
+				resolved = _load_record_value(
+					value, getattr(variable, "reference_doctype", None), variable_type, raw_key
+				)
 			if variable_type == "Doctype Liste" and path and not path.endswith("[]"):
 				path = f"{path}[]"
 			if path and resolved is None:
@@ -2415,12 +2439,67 @@ def _coerce_context_value(value, kind):
 	return _coerce_bool_if_needed(value, kind)
 
 
+def _record_names(value: Any, variable_type: str, label: str) -> list[str]:
+	if isinstance(value, str):
+		text = value.strip()
+		if not (variable_type == "Doctype Liste" and text.startswith("[")):
+			return [text] if text else []
+		value = frappe.parse_json(text)
+	if not isinstance(value, (list, tuple)) or not all(isinstance(item, str) for item in value):
+		frappe.throw(_("Ungültiger Datensatz für Variable {0}.").format(frappe.bold(label)))
+	names = [item.strip() for item in value if item.strip()]
+	if variable_type == "Doctype" and len(names) > 1:
+		frappe.throw(_("Variable {0} erwartet genau einen Datensatz.").format(frappe.bold(label)))
+	return names
+
+
+def _load_record_value(value: Any, reference_doctype: str | None, variable_type: str, label: str) -> Any:
+	"""Lädt fest gewählte Datensätze einer Doctype-Variable in den Kontext.
+
+	Der Wert ist ein Name (``Doctype``) oder eine Liste von Namen (``Doctype Liste``).
+	Geladen wird nur mit Leserecht des rendernden Benutzers; danach steht der
+	Datensatz wie ``objekt`` im Kontext und folgt Link-Feldern. Bereits aufgelöste
+	Dokumente (Pfade, Vorschau-Mocks) bleiben unverändert. ``None`` = kein Datensatz.
+	"""
+	if value is None or _is_document_like(value):
+		return value
+	if isinstance(value, (list, tuple)) and value and all(_is_document_like(item) for item in value):
+		return _wrap_jinja_value(value)
+	names = _record_names(value, variable_type, label)
+	if not names:
+		return None
+	doctype = cstr(reference_doctype or "").strip()
+	if not doctype:
+		frappe.throw(_("Variable {0} hat keinen Referenz-Doctype.").format(frappe.bold(label)))
+	records = []
+	for name in names:
+		if not frappe.db.exists(doctype, name):
+			frappe.throw(
+				_("{0} {1} für Variable {2} existiert nicht.").format(
+					_(doctype), frappe.bold(name), frappe.bold(label)
+				),
+				frappe.DoesNotExistError,
+			)
+		if not frappe.has_permission(doctype, "read", doc=name):
+			frappe.throw(
+				_("Keine Leseberechtigung für {0} {1} (Variable {2}).").format(
+					_(doctype), frappe.bold(name), frappe.bold(label)
+				),
+				frappe.PermissionError,
+			)
+		records.append(_LinkResolvingRow(frappe.get_doc(doctype, name)))
+	return records if variable_type == "Doctype Liste" else records[0]
+
+
 def _apply_context_overrides(context, template=None, run=None):
-	fields = input_fields(template, run) if template else context_fields(run)
+	fields = input_fields(template, run, include_records=True) if template else context_fields(run)
 	types = {field["name"]: field["type"] for field in fields}
 	context["_input_types"] = types
 	for key, entry in (context.get("_serienbrief_value_overrides") or {}).items():
 		if not _entry_has_explicit_value(entry) or key.startswith("_") or "." in key:
+			continue
+		if types.get(key) in RECORD_TYPES:
+			# Datensatz-Namen lädt _apply_template_variables; hier kein Rohtext.
 			continue
 		context[key] = _coerce_context_value(entry["value"], types.get(key))
 	for field in context_fields(run):
@@ -2810,8 +2889,10 @@ _BRACKET_INDEX_PARTS_RE = re.compile(r"\[(\d+)\]")
 
 def _resolve_value_path(path: str, context: Dict[str, Any]) -> Any:
 	path = cstr(path).strip()
+	record_input = isinstance(context, dict) and (context.get("_input_types") or {}).get(path) in RECORD_TYPES
 	for key in (path, _path_override_key(path)):
-		override = _get_value_override(context, key)
+		# Datensatz-Eingaben liegen geladen im Kontext, nicht als Namen in den Overrides.
+		override = None if record_input else _get_value_override(context, key)
 		if override is not None:
 			return _coerce_context_value(override, (context.get("_input_types") or {}).get(path))
 	raw_segments = [seg.strip() for seg in cstr(path).split(".") if seg.strip()]

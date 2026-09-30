@@ -11,19 +11,31 @@ from frappe.utils import nowdate
 from mail_merge.mail_merge.utils.textbaustein_loader import get_textbaustein
 
 SCALAR_TYPES = {"Text", "String", "Datum", "Bool", "Zahl"}
+# Doctype-Variablen: Wert ist ein Datensatz-Name bzw. eine Liste von Namen.
+RECORD_TYPES = {"Doctype", "Doctype Liste"}
 
 
 def context_fields(run=None):
 	return [{"name": "datum", "label": "Datum", "type": "Datum", "default": str((run.get("date") if run else None) or nowdate()), "required": False, "description": "Datum im Render-Kontext", "path": "datum", "aliases": ["datum_iso"]}]
 
 
-def input_fields(template, run=None):
+def input_fields(template, run=None, include_records=False):
+	"""Eingaben der Vorlage. ``include_records`` nimmt Doctype-Variablen der Vorlage
+	(fest wählbarer Datensatz) auf; Clients ohne Datensatz-Auswahl lassen es aus."""
 	from mail_merge.mail_merge.doctype.serienbrief_durchlauf import serienbrief_durchlauf as core
 	fields = {f["name"]: f for f in context_fields(run)}
 	defaults = core._parse_variable_values(template.get("variablen_werte"))
 	for row in template.get("variables") or []:
 		key = frappe.scrub(row.variable)
 		kind = row.variable_type or "Text"
+		if kind in RECORD_TYPES and include_records:
+			entry = defaults.get(key) or {}
+			# Mit Pfad kommt der Datensatz aus dem Objekt; die Auswahl ist dann optional.
+			fields[key] = {"name": key, "label": row.label or row.variable, "type": kind,
+				"reference_doctype": row.get("reference_doctype") or "", "default": entry.get("value"),
+				"required": not bool(row.get("optional") or entry.get("path")),
+				"description": row.get("beschreibung") or "", "path": key}
+			continue
 		if kind not in SCALAR_TYPES:
 			continue
 		entry = defaults.get(key) or {}
