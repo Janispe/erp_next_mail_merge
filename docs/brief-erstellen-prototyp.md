@@ -87,7 +87,13 @@ Texte nutzen mehrzeilige Felder; Bool-Variablen eine Ja/Nein-Auswahl.
 
 Bausteine erhalten ausschließlich deklarierte Eingaben. Ihre zugeordneten
 Pfade werden im übergeordneten Kontext aufgelöst, auch für `datum` und `objekt`.
-Ohne Pfadzuordnung oder Festwert wird kein gleichnamiger Kontextwert übernommen.
+Ohne Pfadzuordnung oder Festwert wird kein gleichnamiger Kontextwert übernommen. Standardpfade werden je Startobjekt zentral im
+Textbaustein gespeichert. Im Dialog „Standardpfade je Startobjekt“ sind alle
+deklarierten Eingaben bearbeitbar, einschließlich Text, Datum und Bool. Die
+Zuordnung verwendet Variablennamen, keine IDs der Variablen-Tabellenzeilen.
+Vorlagen können einzelne Pfade überschreiben; die übrigen Eingaben verwenden
+weiter den Baustein-Standard. Ein absichtlich geleertes sichtbares Pfadfeld
+entfernt seine Zuordnung; zusätzliche, nicht bearbeitete Einträge bleiben erhalten.
 Deklarierte Ausgaben werden unter `outputs.<baustein>.<ausgabe>` veröffentlicht
 und können als Eingabepfad eines folgenden Bausteins dienen. Fachliche Druckprofile und Markenanpassungen liegen in der jeweiligen
 Anwendung, für Hausverwaltung in `mail_merge_extensions.py` und

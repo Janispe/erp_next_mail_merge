@@ -1115,7 +1115,7 @@ const hv_pick_mapping_value = (mapping, req) => {
 	if (!mapping || typeof mapping !== "object") {
 		return "";
 	}
-	const keys = [req.req_key, req.doctype, req.fieldname].filter(Boolean);
+	const keys = [req.req_key, req.legacy_key, req.doctype, req.fieldname].filter(Boolean);
 	for (const key of keys) {
 		const val = mapping[key];
 		if (val || val === 0) {
@@ -1145,30 +1145,41 @@ const hv_format_requirement = (req, pathMap) => {
 	return `${label} (${parts.join(" · ")})`;
 };
 
-const hv_get_reference_requirements = (frm) => {
+const hv_get_input_requirements = (frm) => {
 	const source = frm.doc.title || frm.doc.name || __("Textbaustein");
-	const requirements = [];
-
-	(frm.doc.variables || [])
-		.filter((row) => row.reference_doctype && (row.variable || row.label) && (row.variable_type || "Text").trim() !== "Text")
-		.forEach((row) => {
-			const fieldname = hv_scrub(row.variable || row.label || row.reference_doctype || "");
-			const useName = row.name && !String(row.name).startsWith("new");
-			const req_key = useName ? row.name : row.reference_doctype || fieldname;
-			requirements.push({
+	return (frm.doc.variables || [])
+		.filter((row) => row.variable || row.label)
+		.map((row) => {
+			const fieldname = hv_scrub(row.variable || row.label);
+			const reference = ["Doctype", "Doctype Liste"].includes((row.variable_type || "Text").trim());
+			return {
 				fieldname,
-				doctype: row.reference_doctype,
-				label: row.label || row.reference_doctype,
+				doctype: reference ? row.reference_doctype : null,
+				label: row.label || row.variable,
 				source,
-				req_key,
-			});
+				// The renderer resolves variable names, not child-row IDs.
+				req_key: fieldname,
+				legacy_key: row.name && !String(row.name).startsWith("new") ? row.name : null,
+			};
 		});
+};
 
-	return requirements;
+const hv_merge_default_paths = (mapping, rows) => {
+	// Preserve entries this dialog does not edit; clear only displayed inputs.
+	const result = { ...mapping };
+	rows.forEach(({ req }) => {
+		[req.req_key, req.fieldname, req.legacy_key, req.doctype].filter(Boolean)
+			.forEach((key) => delete result[key]);
+	});
+	rows.forEach(({ req, getValue }) => {
+		const value = (getValue() || "").trim();
+		if (value) result[req.req_key] = value;
+	});
+	return result;
 };
 
 const hv_update_standardpfade_labels = (frm) => {
-	const requirements = hv_get_reference_requirements(frm);
+	const requirements = hv_get_input_requirements(frm);
 	let touched = false;
 
 	(frm.doc.standardpfade || []).forEach((row) => {
@@ -1192,6 +1203,10 @@ const hv_render_default_path_picker = (frm, requirement, field, existingValue, s
 	const input = $(`<input type="text" class="form-control" />`);
 	input.val(existingValue || "");
 	wrapper.append(input);
+	if (!requirement.doctype) {
+		wrapper.append($(`<div class="text-muted small"></div>`).text(__("Pfad im Render-Kontext, z. B. datum oder druck_schwarz_weiss.")));
+		return () => input.val();
+	}
 
 	const helper = $(`<div class="mt-2"></div>`);
 	const btn = $(`<button type="button" class="btn btn-xs btn-secondary">${__("Pfad wählen")}</button>`);
@@ -1246,10 +1261,10 @@ const hv_render_default_path_picker = (frm, requirement, field, existingValue, s
 };
 
 const hv_open_default_path_dialog = (frm) => {
-	const requirements = hv_get_reference_requirements(frm);
+	const requirements = hv_get_input_requirements(frm);
 	if (!requirements.length) {
 		frappe.msgprint({
-			message: __("Bitte hinterlege zuerst Referenz-Doctypes im Textbaustein."),
+			message: __("Bitte hinterlege zuerst Eingabevariablen im Textbaustein."),
 			indicator: "orange",
 		});
 		return;
@@ -1258,6 +1273,8 @@ const hv_open_default_path_dialog = (frm) => {
 	const existingStart = (frm.doc.standardpfade || [])[0]?.startobjekt || "";
 	let rows = [];
 	let startNodes = [];
+	let renderEpoch = 0;
+	let loadedStart = null;
 
 	const dialog = new frappe.ui.Dialog({
 		title: __("Standardpfade je Startobjekt"),
@@ -1287,19 +1304,16 @@ const hv_open_default_path_dialog = (frm) => {
 				return;
 			}
 
-			const newMapping = {};
-			rows.forEach(({ req, getValue }) => {
-				const val = (getValue() || "").trim();
-				if (val) {
-					newMapping[req.req_key] = val;
-				}
-			});
-
+			if (loadedStart !== startobjekt) {
+				frappe.msgprint(__("Die Zuordnungen werden noch geladen. Bitte kurz warten."));
+				return;
+			}
 			let targetRow = (frm.doc.standardpfade || []).find((r) => r.startobjekt === startobjekt);
 			if (!targetRow) {
 				targetRow = frm.add_child("standardpfade");
 				targetRow.startobjekt = startobjekt;
 			}
+			const newMapping = hv_merge_default_paths(hv_parse_mapping(targetRow.pfad_zuordnung), rows);
 
 			frappe.model.set_value(
 				targetRow.doctype,
@@ -1318,6 +1332,8 @@ const hv_open_default_path_dialog = (frm) => {
 
 	const renderPaths = async () => {
 		const startobjekt = dialog.get_value("startobjekt");
+		const epoch = ++renderEpoch;
+		loadedStart = null;
 		container.empty();
 		rows = [];
 
@@ -1326,12 +1342,14 @@ const hv_open_default_path_dialog = (frm) => {
 			return;
 		}
 
-		startNodes = await hv_get_start_nodes_for_startobjekt(startobjekt);
+		const nodes = await hv_get_start_nodes_for_startobjekt(startobjekt);
+		if (epoch !== renderEpoch || dialog.get_value("startobjekt") !== startobjekt) return;
+		startNodes = nodes;
 		const targetRow = (frm.doc.standardpfade || []).find((r) => r.startobjekt === startobjekt);
 		const mapping = hv_parse_mapping(targetRow?.pfad_zuordnung);
 
 		if (!requirements.length) {
-			container.html(`<div class="text-muted small">${__("Keine Referenzen definiert.")}</div>`);
+			container.html(`<div class="text-muted small">${__("Keine Eingabevariablen definiert.")}</div>`);
 			return;
 		}
 
@@ -1350,8 +1368,9 @@ const hv_open_default_path_dialog = (frm) => {
 		});
 
 		if (!rows.length) {
-			container.html(`<div class="text-muted small">${__("Keine Referenzen definiert.")}</div>`);
+			container.html(`<div class="text-muted small">${__("Keine Eingabevariablen definiert.")}</div>`);
 		}
+		loadedStart = startobjekt;
 	};
 
 	dialog.fields_dict.startobjekt.$input.on("change", () => renderPaths());
