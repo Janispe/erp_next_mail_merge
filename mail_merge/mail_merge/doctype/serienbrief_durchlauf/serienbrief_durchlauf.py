@@ -1227,6 +1227,11 @@ class SerienbriefDurchlauf(Document):
 			frappe.throw(
 				_("Die Vorlagenversion {0} gehört nicht zur Vorlage {1}.").format(version, self.vorlage)
 			)
+		from mail_merge.mail_merge.doctype.serienbrief_vorlage.serienbrief_vorlage import TEMPLATE_VERSION_SPEC
+		from mail_merge.mail_merge.utils import versioning
+
+		# Der Durchlauf rendert genau diese Version; sie darf sich nicht mehr ändern.
+		versioning.seal_version(TEMPLATE_VERSION_SPEC, version)
 
 	def _run_template(self):
 		"""Vorlage dieses Durchlaufs: aktueller Stand oder die gewählte Vorlagenversion."""

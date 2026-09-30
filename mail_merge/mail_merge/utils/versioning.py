@@ -125,6 +125,7 @@ def latest_version(spec: VersionSpec, owner_name: str):
 		fields=[
 			"name", "version_number", "version_label", "source", "is_protected",
 			"restored_from", "content_hash", "snapshot", "creation", "modified", "owner",
+			*(["sealed"] if _has_seal(spec) else []),
 		],
 		order_by="version_number desc",
 		limit=1,
@@ -159,6 +160,57 @@ def can_coalesce(
 	return 0 <= seconds <= VERSION_SESSION_SECONDS
 
 
+def _has_seal(spec: VersionSpec) -> bool:
+	try:
+		return frappe.get_meta(spec.version_doctype).has_field("sealed")
+	except Exception:
+		return False
+
+
+def seal_version(spec: VersionSpec, version_name: str | None) -> None:
+	"""Version festschreiben: sie wird nie mehr als Arbeitsstand aufgefrischt.
+
+	Jede Stelle, die auf eine Version verweist (Festlegung, Durchlauf, Nachweis im
+	Dokument, Stueckliste, Wiederherstellung, Vorschlag), schreibt sie fest. Sonst
+	koennte eine spaetere Speicherung derselben Sitzung ihren Inhalt ersetzen.
+	"""
+	if version_name and version_doctype_available(spec) and _has_seal(spec):
+		frappe.db.sql(
+			f"update `tab{spec.version_doctype}` set sealed=1 where name=%s and sealed=0", version_name
+		)
+
+
+def _seal_if_unchanged(spec: VersionSpec, version_name: str, content_hash: str) -> bool:
+	"""Festschreiben nur, wenn die Version noch genau diesen Inhalt hat (atomar)."""
+	if not _has_seal(spec):
+		return True
+	frappe.db.sql(
+		f"update `tab{spec.version_doctype}` set sealed=1 where name=%s and content_hash=%s",
+		(version_name, content_hash),
+	)
+	# Sperrendes Lesen sieht den aktuellen Stand, nicht den Snapshot der Transaktion.
+	row = frappe.db.sql(
+		f"select sealed, content_hash from `tab{spec.version_doctype}` where name=%s for update",
+		version_name,
+	)
+	return bool(row) and bool(cint(row[0][0])) and row[0][1] == content_hash
+
+
+def _may_refresh(spec: VersionSpec, version_name: str) -> bool:
+	"""Nur nicht festgeschriebene und gerade nicht gesperrte Arbeitsstaende auffrischen.
+
+	SKIP LOCKED: Schreibt ein anderer Vorgang die Version gerade fest (etwa ein langer
+	Hintergrund-Render), wartet das Speichern nicht, sondern legt eine neue Version an.
+	"""
+	if not _has_seal(spec):
+		return True
+	row = frappe.db.sql(
+		f"select sealed from `tab{spec.version_doctype}` where name=%s for update skip locked",
+		version_name,
+	)
+	return bool(row) and not cint(row[0][0])
+
+
 def _refresh_session_version(spec: VersionSpec, doc, latest, snapshot: Dict[str, Any], content_hash: str):
 	previous_rows = frappe.get_all(
 		spec.version_doctype,
@@ -190,8 +242,12 @@ def create_version(
 	restored_from: str = "",
 	force: bool = False,
 	based_on: str = "",
+	seal: bool = False,
 ):
-	"""Legt Meilensteine an und fasst schnelle, unbenannte Speicherungen zusammen."""
+	"""Legt Meilensteine an und fasst schnelle, unbenannte Speicherungen zusammen.
+
+	``seal``: die gelieferte Version wird zugleich festgeschrieben (siehe seal_version).
+	"""
 	if not doc or not doc.name or not version_doctype_available(spec):
 		return None
 	snapshot = build_snapshot(spec, doc)
@@ -202,10 +258,13 @@ def create_version(
 	frappe.db.sql(f"select name from `tab{spec.doctype}` where name=%s for update", doc.name)
 	latest = latest_version(spec, doc.name)
 	if latest and latest.content_hash == content_hash and not force:
-		return latest.name
-	coalesce = can_coalesce(latest, source=source, label=label, restored_from=restored_from, force=force)
-	if coalesce and spec.non_live_sources and frappe.db.exists(spec.version_doctype, {"based_on": latest.name}):
-		coalesce = False
+		if not seal or _seal_if_unchanged(spec, latest.name, content_hash):
+			return latest.name
+	coalesce = (
+		not seal
+		and can_coalesce(latest, source=source, label=label, restored_from=restored_from, force=force)
+		and _may_refresh(spec, latest.name)
+	)
 	if coalesce:
 		return _refresh_session_version(spec, doc, latest, snapshot, content_hash)
 
@@ -232,27 +291,38 @@ def create_version(
 		values["assistant_created"] = int(bool(doc.get("assistant_created")))
 		values["based_on"] = based_on or None
 		values["is_protected"] = int(source in spec.non_live_sources)
+	if seal and _has_seal(spec):
+		values["sealed"] = 1
 	if spec.extra_version_fields:
 		values.update(spec.extra_version_fields(doc) or {})
 	version = frappe.get_doc(values)
 	version.insert(ignore_permissions=True)
+	# Ausgangspunkte von Vorschlaegen und Wiederherstellungen bleiben unveraenderlich.
+	seal_version(spec, based_on)
+	seal_version(spec, restored_from)
 	if spec.after_version_saved:
 		spec.after_version_saved(doc, version, snapshot)
 	return version.name
 
 
-def ensure_current_version(spec: VersionSpec, doc, *, source: str = "Systemänderung") -> str | None:
+def ensure_current_version(
+	spec: VersionSpec, doc, *, source: str = "Systemänderung", seal: bool = False
+) -> str | None:
 	"""Version, die exakt dem aktuellen Stand entspricht; legt sie bei Drift an.
 
 	Drift entsteht, wenn ein Stand am ``on_update`` vorbei geschrieben wurde
 	(``db.set_value``, SQL-Skripte) oder die Historie vor dem Dokument fehlt.
+	``seal``: wer die Version referenziert, schreibt sie fest. Aendert eine parallele
+	Speicherung sie gerade, entsteht stattdessen eine neue, festgeschriebene Version.
 	"""
 	if not doc or not doc.name or not version_doctype_available(spec):
 		return None
+	current_hash = snapshot_hash(build_snapshot(spec, doc))
 	latest = latest_version(spec, doc.name)
-	if latest and latest.content_hash == snapshot_hash(build_snapshot(spec, doc)):
-		return latest.name
-	return create_version(spec, doc, source=source if latest else "Ausgangsstand")
+	if latest and latest.content_hash == current_hash:
+		if not seal or latest.get("sealed") or _seal_if_unchanged(spec, latest.name, current_hash):
+			return latest.name
+	return create_version(spec, doc, source=source if latest else "Ausgangsstand", seal=seal)
 
 
 def rename_versions(spec: VersionSpec, old: str, new: str) -> None:
@@ -286,6 +356,7 @@ def version_metadata(version, *, current_hash: str = "", current_version: str = 
 		"based_on": cstr(version.get("based_on") or ""),
 		"assistant_created": bool(version.get("assistant_created")) or cstr(version.source).startswith("KI-"),
 		"is_proposal": version.source == "KI-Vorschlag",
+		"sealed": bool(cint(version.get("sealed"))),
 		"content_hash": cstr(version.content_hash or ""),
 		"is_current": bool(
 			current_hash
@@ -352,6 +423,7 @@ def list_versions(spec: VersionSpec, doc, *, evidence_names=frozenset()) -> Dict
 			"name", "version_number", "version_label", "source", "change_summary",
 			"is_protected", "restored_from", "content_hash", "creation", "owner",
 			*(["based_on", "assistant_created"] if spec.non_live_sources else []),
+			*(["sealed"] if _has_seal(spec) else []),
 		],
 		order_by="version_number desc",
 		limit_page_length=0,

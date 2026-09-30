@@ -203,8 +203,11 @@ def normalize_fixed_versions(template) -> None:
 			frappe.throw(_("Fixierte Baustein-Versionen: erwartet wird {\"<Baustein>\": <Versionsnummer>}."))
 	fixed = parse_fixed_versions(raw)
 	for name, number in fixed.items():
-		if not version_by_number(name, number):
+		version = version_by_number(name, number)
+		if not version:
 			frappe.throw(_("Textbaustein {0}: Version {1} existiert nicht.").format(name, number))
+		# Eine festgelegte Version darf nie mehr als Arbeitsstand aufgefrischt werden.
+		versioning.seal_version(SPEC, version.name)
 	template.baustein_versionen = json.dumps(dict(sorted(fixed.items())), ensure_ascii=False) if fixed else None
 
 
@@ -257,6 +260,7 @@ def textbaustein_bill(template) -> List[Dict[str, Any]]:
 		if fixed_number:
 			version = version_by_number(name, fixed_number)
 			if version:
+				versioning.seal_version(SPEC, version.name)
 				bill.append(
 					{
 						"baustein": name,
@@ -268,7 +272,8 @@ def textbaustein_bill(template) -> List[Dict[str, Any]]:
 				)
 			continue
 		block = frappe.get_doc(TEXTBAUSTEIN, name)
-		version_name = versioning.ensure_current_version(SPEC, block)
+		# Die Stueckliste verweist auf diese Version: festschreiben.
+		version_name = versioning.ensure_current_version(SPEC, block, seal=True)
 		if not version_name:
 			continue
 		number, content_hash = frappe.db.get_value(
@@ -418,7 +423,9 @@ def render_version_refs(template) -> Dict[str, Any]:
 			}
 		template_doc = frappe.get_doc("Serienbrief Vorlage", template.name)
 		return {
-			"vorlagenversion": versioning.ensure_current_version(TEMPLATE_VERSION_SPEC, template_doc),
+			"vorlagenversion": versioning.ensure_current_version(
+				TEMPLATE_VERSION_SPEC, template_doc, seal=True
+			),
 			"textbaustein_versionen": json.dumps(
 				textbaustein_bill(template_doc), ensure_ascii=False, separators=(",", ":")
 			),

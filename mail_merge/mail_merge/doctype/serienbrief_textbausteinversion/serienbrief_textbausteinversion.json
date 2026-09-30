@@ -11,6 +11,7 @@
   "source",
   "change_summary",
   "is_protected",
+  "sealed",
   "restored_from",
   "content_hash",
   "snapshot"
@@ -59,6 +60,14 @@
    "label": "Geschützt"
   },
   {
+   "default": "0",
+   "description": "Wird gesetzt, sobald etwas auf diese Version verweist (Festlegung, Durchlauf, Dokument, Stückliste, Wiederherstellung, Vorschlag). Festgeschriebene Versionen werden nie mehr aufgefrischt.",
+   "fieldname": "sealed",
+   "fieldtype": "Check",
+   "label": "Festgeschrieben",
+   "read_only": 1
+  },
+  {
    "fieldname": "restored_from",
    "fieldtype": "Link",
    "label": "Wiederhergestellt aus",
@@ -82,7 +91,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-30 12:00:00.000000",
+ "modified": "2026-09-30 19:00:00.000000",
  "modified_by": "Administrator",
  "module": "Mail Merge",
  "name": "Serienbrief Textbausteinversion",
