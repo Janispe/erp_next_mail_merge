@@ -3008,17 +3008,19 @@ def delete_editor_version(
 
 
 def _versions_used_by_documents(template_name: str) -> set[str]:
-	"""Versionen, mit denen Serienbrief Dokumente erzeugt wurden, bleiben als Beleg erhalten."""
-	if not frappe.get_meta("Serienbrief Dokument").has_field("vorlagenversion"):
-		return set()
-	return set(
-		frappe.get_all(
-			"Serienbrief Dokument",
-			filters={"vorlage": template_name, "vorlagenversion": ["is", "set"]},
-			pluck="vorlagenversion",
-			distinct=True,
-		)
-	)
+	"""Versionen, mit denen Briefe erzeugt wurden oder die ein Durchlauf rendern soll."""
+	used: set[str] = set()
+	for doctype in ("Serienbrief Dokument", "Serienbrief Durchlauf"):
+		if frappe.get_meta(doctype).has_field("vorlagenversion"):
+			used.update(
+				frappe.get_all(
+					doctype,
+					filters={"vorlage": template_name, "vorlagenversion": ["is", "set"]},
+					pluck="vorlagenversion",
+					distinct=True,
+				)
+			)
+	return used
 
 
 def _apply_template_snapshot(doc, snapshot: Dict[str, Any]) -> None:

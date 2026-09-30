@@ -892,6 +892,9 @@ const hv_mount_durchlauf_viewer = (frm) => {
 };
 
 frappe.ui.form.on("Serienbrief Durchlauf", {
+	setup(frm) {
+		frm.set_query("vorlagenversion", () => ({ filters: { vorlage: frm.doc.vorlage || "" } }));
+	},
 	refresh(frm) {
 		// Primäre Oberfläche ist die Vollbild-Page (serienbrief_durchlauf_viewer) —
 		// das Standardformular leitet dorthin um. Debug-Bypass: route_options.hv_show_form
@@ -978,6 +981,8 @@ frappe.ui.form.on("Serienbrief Durchlauf", {
 		hv_trigger_preview(frm);
 	},
 	vorlage(frm) {
+		// Eine Vorlagenversion gehört immer zu genau einer Vorlage.
+		if (frm.doc.vorlagenversion) frm.set_value("vorlagenversion", null);
 		hv_load_template_requirements(frm);
 		hv_apply_template_defaults(frm).then(() => {
 			if (!frm.doc.vorlage || !frm.doc.iteration_doctype) return;

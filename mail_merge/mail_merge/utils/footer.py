@@ -42,21 +42,45 @@ def render_footer_extensions(doc: Any | None = None) -> Markup:
 	return Markup("\n".join(parts))
 
 
+def _fixed_template_version(doc: Any | None) -> str:
+	"""Vom Durchlauf gewählte Vorlagenversion; leer = aktueller Stand.
+
+	``Serienbrief Dokument.vorlagenversion`` ist nur ein Nachweis (immer gesetzt) und
+	entscheidet deshalb nicht; massgeblich ist das Feld des Durchlaufs.
+	"""
+	if cstr(getattr(doc, "doctype", None) or "") == "Serienbrief Dokument":
+		durchlauf = cstr(getattr(doc, "durchlauf", None) or "").strip()
+		if not durchlauf or not frappe.get_meta("Serienbrief Durchlauf").has_field("vorlagenversion"):
+			return ""
+		return cstr(frappe.db.get_value("Serienbrief Durchlauf", durchlauf, "vorlagenversion") or "")
+	return cstr(getattr(doc, "vorlagenversion", None) or "")
+
+
+def _footer_template(doc: Any | None, vorlage_name: str):
+	from mail_merge.mail_merge.utils.textbaustein_versions import template_at_version
+
+	version = _fixed_template_version(doc)
+	if not version and not frappe.db.exists("Serienbrief Vorlage", vorlage_name):
+		return None
+	return template_at_version(vorlage_name, version or None)
+
+
 def render_footer_blocks(doc: Any | None = None) -> Markup:
 	vorlage_name = cstr(getattr(doc, "vorlage", None) or "").strip()
 	if not vorlage_name:
 		return Markup("")
 	try:
-		if not frappe.db.exists("Serienbrief Vorlage", vorlage_name):
-			return Markup("")
-		template = frappe.get_cached_doc("Serienbrief Vorlage", vorlage_name)
+		template = _footer_template(doc, vorlage_name)
 	except Exception:
+		return Markup("")
+	if not template:
 		return Markup("")
 
 	durchlauf = frappe.get_doc(
 		{
 			"doctype": "Serienbrief Durchlauf",
 			"vorlage": vorlage_name,
+			"vorlagenversion": _fixed_template_version(doc) or None,
 			"iteration_doctype": cstr(getattr(doc, "iteration_doctype", None) or getattr(template, "haupt_verteil_objekt", None) or ""),
 			"date": getattr(doc, "date", None) or frappe.utils.today(),
 		}
@@ -69,10 +93,10 @@ def render_template_path_footer(doc: Any | None = None) -> str:
 	if not vorlage_name:
 		return ""
 	try:
-		if not frappe.db.exists("Serienbrief Vorlage", vorlage_name):
-			return ""
-		vorlage_doc = frappe.get_cached_doc("Serienbrief Vorlage", vorlage_name)
+		vorlage_doc = _footer_template(doc, vorlage_name)
 	except Exception:
+		return ""
+	if not vorlage_doc:
 		return ""
 
 	chain: list[str] = []

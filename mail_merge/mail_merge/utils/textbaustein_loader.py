@@ -5,7 +5,9 @@ Aufloesung in dieser Reihenfolge:
 1. Fixierte Version: legt die Vorlage in ``baustein_versionen`` eine Versionsnummer
    fest, gilt diese fuer den Baustein ueberall in der Vorlage, auch verschachtelt.
    Fehlt die Version, ist das ein harter Fehler.
-2. Historischer Stand innerhalb von ``pinned_textbausteine`` (z. B. die Vorschau
+2. Historischer Stand: eine aus einer Vorlagenversion erzeugte Vorlage traegt ihre
+   damaligen Bausteine in ``template.flags.textbaustein_snapshots``; ebenso
+   innerhalb von ``pinned_textbausteine`` (z. B. die Vorschau
    einer alten Vorlagenversion). Die Bindung liegt auf ``frappe.local`` und wirkt
    deshalb nur im aktuellen Request/Thread.
 3. Sonst der aktuelle Stand.
@@ -64,6 +66,10 @@ def get_textbaustein(name: str, template=None):
 	version_number = fixed_version_number(template, name)
 	if version_number:
 		return _get_fixed_textbaustein(name, version_number)
+	# Eine historische Vorlagenversion traegt ihre damaligen Bausteine selbst mit.
+	historic = getattr(getattr(template, "flags", None), "textbaustein_snapshots", None)
+	if historic and name in historic:
+		return historic[name]
 	pinned = getattr(frappe.local, _PIN_ATTR, None)
 	if pinned and name in pinned:
 		return pinned[name]

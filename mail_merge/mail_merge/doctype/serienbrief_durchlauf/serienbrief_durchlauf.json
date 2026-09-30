@@ -16,6 +16,8 @@
   "iteration_doctype",
   "iteration_objekte",
   "vorlage",
+  "vorlagenversion",
+  "ohne_auto_render",
   "vorlagen_variablen_section",
   "vorlagen_variablen_html",
   "date",
@@ -80,6 +82,21 @@
    "reqd": 1
   },
   {
+   "depends_on": "vorlage",
+   "description": "Leer = aktueller Stand der Vorlage. Gesetzt = die Briefe werden aus dieser Version erzeugt, mit den Bausteinen, wie sie damals waren.",
+   "fieldname": "vorlagenversion",
+   "fieldtype": "Link",
+   "label": "Vorlagenversion",
+   "options": "Serienbrief Vorlagenversion"
+  },
+  {
+   "default": "0",
+   "description": "Beim Speichern keine Briefe erzeugen. Für vorbereitete Entwürfe (z. B. vom Assistenten), die erst geprüft und korrigiert werden; gerendert wird dann bewusst über „Lauf starten“.",
+   "fieldname": "ohne_auto_render",
+   "fieldtype": "Check",
+   "label": "Nicht automatisch rendern"
+  },
+  {
    "fieldname": "vorlagen_variablen_section",
    "fieldtype": "Section Break",
    "label": "Vorlagen-Variablen"
@@ -128,7 +145,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2024-01-01 00:00:00.000000",
+ "modified": "2026-09-30 17:00:00.000000",
  "modified_by": "Administrator",
  "module": "Mail Merge",
  "name": "Serienbrief Durchlauf",

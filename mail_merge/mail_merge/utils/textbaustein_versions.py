@@ -248,7 +248,11 @@ def collect_textbaustein_names(template) -> List[str]:
 def textbaustein_bill(template) -> List[Dict[str, Any]]:
 	"""Stueckliste: welche Baustein-Version die Vorlage fuer jeden Baustein jetzt verwendet."""
 	bill = []
+	historic = getattr(getattr(template, "flags", None), "textbaustein_bill_rows", None) or {}
 	for name in collect_textbaustein_names(template):
+		if name in historic and not fixed_version_number(template, name):
+			bill.append(historic[name])
+			continue
 		fixed_number = fixed_version_number(template, name)
 		if fixed_number:
 			version = version_by_number(name, fixed_number)
@@ -287,6 +291,34 @@ def parse_bill(raw) -> List[Dict[str, Any]]:
 	except Exception:
 		return []
 	return [row for row in (data or []) if isinstance(row, dict) and row.get("baustein")]
+
+
+def template_at_version(vorlage: str, vorlagenversion: str | None = None):
+	"""Vorlage fuer einen Durchlauf: aktueller Stand oder eine historische Version.
+
+	Eine historische Version wird vollstaendig reproduziert: Vorlageninhalt aus dem
+	Snapshot und Bausteine im Stand ihrer Stueckliste. Versionen aus der Zeit vor der
+	Baustein-Historie haben keine Stueckliste und verwenden aktuelle Bausteine.
+	Das Ergebnis ist ungespeichert und darf nie gespeichert werden.
+	"""
+	from mail_merge.mail_merge.doctype.serienbrief_vorlage.serienbrief_vorlage import TEMPLATE_VERSION_SPEC
+
+	if not vorlagenversion:
+		return frappe.get_cached_doc("Serienbrief Vorlage", vorlage)
+	version = versioning.require_version(TEMPLATE_VERSION_SPEC, vorlagenversion, vorlage)
+	if frappe.db.exists("Serienbrief Vorlage", vorlage):
+		template = frappe.get_doc("Serienbrief Vorlage", vorlage)
+	else:
+		template = frappe.new_doc("Serienbrief Vorlage")
+		template.name = vorlage
+	versioning.apply_snapshot(
+		TEMPLATE_VERSION_SPEC, template, versioning.parse_snapshot(TEMPLATE_VERSION_SPEC, version.snapshot)
+	)
+	bill = parse_bill(version.get("textbaustein_versionen"))
+	template.flags.textbaustein_snapshots = pinned_docs_from_bill(bill)
+	template.flags.textbaustein_bill_rows = {row["baustein"]: row for row in bill}
+	template.flags.vorlagenversion = version.name
+	return template
 
 
 def pinned_docs_from_bill(bill) -> Dict[str, Any]:
@@ -376,6 +408,14 @@ def render_version_refs(template) -> Dict[str, Any]:
 	from mail_merge.mail_merge.doctype.serienbrief_vorlage.serienbrief_vorlage import TEMPLATE_VERSION_SPEC
 
 	try:
+		if template.flags.get("vorlagenversion"):
+			# Historischer Durchlauf: Version und Bausteine stehen bereits fest.
+			return {
+				"vorlagenversion": template.flags.vorlagenversion,
+				"textbaustein_versionen": json.dumps(
+					textbaustein_bill(template), ensure_ascii=False, separators=(",", ":")
+				),
+			}
 		template_doc = frappe.get_doc("Serienbrief Vorlage", template.name)
 		return {
 			"vorlagenversion": versioning.ensure_current_version(TEMPLATE_VERSION_SPEC, template_doc),

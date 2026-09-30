@@ -36,7 +36,7 @@ from mail_merge.mail_merge.utils.serienbrief_pdf_form import read_file_url_bytes
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import render_pdf_bytes_as_html_fragment
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import render_pdf_form_block
 from mail_merge.mail_merge.utils.textbaustein_loader import fixed_version_number, get_textbaustein  # noqa: F401 (Re-Export fuer Clients)
-from mail_merge.mail_merge.utils.textbaustein_versions import render_version_refs
+from mail_merge.mail_merge.utils.textbaustein_versions import render_version_refs, template_at_version
 
 
 class _IterationTargetRow:
@@ -509,6 +509,9 @@ class SerienbriefDurchlauf(Document):
 		# Läuft gerade ein Job? Dann nicht dazwischenfunken.
 		if cstr(getattr(self, "status", "") or "") == "Läuft":
 			return
+		# Vorbereitete Entwürfe und reine Eingabekorrekturen rendern nicht nebenbei.
+		if self.flags.get("skip_auto_render") or cint(self.get("ohne_auto_render")):
+			return
 		rows = getattr(self, "iteration_objekte", None) or []
 		if not self.vorlage or not rows:
 			return
@@ -751,7 +754,7 @@ class SerienbriefDurchlauf(Document):
 		if not self.vorlage:
 			frappe.throw(_("Bitte wählen Sie eine Serienbrief Vorlage."))
 
-		template = frappe.get_cached_doc("Serienbrief Vorlage", self.vorlage)
+		template = self._run_template()
 		iteration_doctype = self.iteration_doctype or template.get("haupt_verteil_objekt")
 		if not iteration_doctype:
 			frappe.throw(_("Bitte wählen Sie einen Iterations-Doctype."))
@@ -807,6 +810,7 @@ class SerienbriefDurchlauf(Document):
 					preview_pages = self._render_segments_preview_pages(segments)
 					footer_doc = frappe._dict(
 						vorlage=self.vorlage,
+						vorlagenversion=self.get("vorlagenversion"),
 						iteration_doctype=iteration_doctype,
 						objekt=objekt,
 						date=self.date,
@@ -1108,7 +1112,7 @@ class SerienbriefDurchlauf(Document):
 		if not self.vorlage:
 			frappe.throw(_("Bitte wählen Sie eine Serienbrief Vorlage."))
 
-		template = frappe.get_cached_doc("Serienbrief Vorlage", self.vorlage)
+		template = self._run_template()
 		iteration_doctype = self.iteration_doctype or template.get("haupt_verteil_objekt")
 		if not iteration_doctype:
 			frappe.throw(_("Bitte wählen Sie einen Iterations-Doctype."))
@@ -1189,12 +1193,37 @@ class SerienbriefDurchlauf(Document):
 		return file_url
 
 	def before_validate(self):
+		self._validate_vorlagenversion()
 		if not getattr(self, "iteration_doctype", None):
 			return
 
 		for row in getattr(self, "iteration_objekte", []) or []:
 			if not getattr(row, "iteration_doctype", None):
 				row.iteration_doctype = self.iteration_doctype
+
+	def _validate_vorlagenversion(self) -> None:
+		version = cstr(self.get("vorlagenversion") or "").strip()
+		if not version:
+			return
+		owner = frappe.db.get_value("Serienbrief Vorlagenversion", version, "vorlage")
+		if not owner:
+			frappe.throw(_("Die gewählte Vorlagenversion existiert nicht mehr."))
+		if owner != self.vorlage:
+			frappe.throw(
+				_("Die Vorlagenversion {0} gehört nicht zur Vorlage {1}.").format(version, self.vorlage)
+			)
+
+	def _run_template(self):
+		"""Vorlage dieses Durchlaufs: aktueller Stand oder die gewählte Vorlagenversion."""
+		version = cstr(self.get("vorlagenversion") or "").strip()
+		if not version:
+			return frappe.get_cached_doc("Serienbrief Vorlage", self.vorlage)
+		key = (self.vorlage, version)
+		cached = getattr(self, "_run_template_cache", None)
+		if not cached or cached[0] != key:
+			cached = (key, template_at_version(self.vorlage, version))
+			self._run_template_cache = cached
+		return cached[1]
 
 	def _build_context(
 		self,
@@ -1684,7 +1713,7 @@ class SerienbriefDurchlauf(Document):
 		data: dict = {}
 		if getattr(self, "vorlage", None):
 			try:
-				tpl = frappe.get_cached_doc("Serienbrief Vorlage", self.vorlage)
+				tpl = self._run_template()
 				parsed = frappe.parse_json(tpl.get("inline_baustein_pfade") or "{}")
 				if isinstance(parsed, dict):
 					data = parsed
@@ -1703,7 +1732,7 @@ class SerienbriefDurchlauf(Document):
 		data: dict = {}
 		if getattr(self, "vorlage", None):
 			try:
-				tpl = frappe.get_cached_doc("Serienbrief Vorlage", self.vorlage)
+				tpl = self._run_template()
 				parsed = frappe.parse_json(tpl.get("inline_baustein_werte") or "{}")
 				if isinstance(parsed, dict):
 					data = parsed
@@ -3614,7 +3643,7 @@ def get_serienbrief_assignments(
 	if not serienbrief.vorlage:
 		frappe.throw(_("Bitte wählen Sie eine Serienbrief Vorlage."))
 
-	template = frappe.get_cached_doc("Serienbrief Vorlage", serienbrief.vorlage)
+	template = serienbrief._run_template()
 	iteration_doctype = serienbrief.iteration_doctype or template.get("haupt_verteil_objekt")
 	if not iteration_doctype:
 		frappe.throw(_("Bitte wählen Sie einen Iterations-Doctype."))
@@ -4063,7 +4092,7 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 	):
 		dok_by_objekt[d.objekt] = d
 
-	template_doc = frappe.get_cached_doc("Serienbrief Vorlage", doc.vorlage) if doc.vorlage else None
+	template_doc = doc._run_template() if doc.vorlage else None
 	input_definitions = input_fields(template_doc, doc) if template_doc else context_fields(doc)
 	recipients: List[Dict[str, Any]] = []
 	overrides_out: Dict[str, Dict[str, Any]] = {}
@@ -4125,7 +4154,7 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 	variable_assignments: List[Dict[str, Any]] = []
 	supports_druck_schwarz_weiss = False
 	if doc.vorlage:
-		template_doc = frappe.get_cached_doc("Serienbrief Vorlage", doc.vorlage)
+		template_doc = doc._run_template()
 		supports_druck_schwarz_weiss = _template_supports_druck_schwarz_weiss(template_doc)
 		global_values = _parse_variable_values(doc.variablen_werte)
 		vorlage_defaults = _parse_variable_values(getattr(template_doc, "variablen_werte", None))
@@ -4208,9 +4237,7 @@ def set_run_variables(
 			(v.get("name"), v.get("value")) for v in variables
 		]
 		vw = {cstr(k): {"value": val} for k, val in items if k and val is not None}
-		frappe.db.set_value(
-			"Serienbrief Durchlauf", docname, "variablen_werte", json.dumps(vw) if vw else "", update_modified=False
-		)
+		doc.variablen_werte = json.dumps(vw) if vw else ""
 
 	if per_recipient_overrides is not None:
 		if isinstance(per_recipient_overrides, str):
@@ -4219,11 +4246,12 @@ def set_run_variables(
 			objekt = cstr(getattr(it, "objekt", "") or "")
 			ov = (per_recipient_overrides or {}).get(objekt) or {}
 			ovw = {cstr(k): {"value": val} for k, val in ov.items() if val is not None}
-			frappe.db.set_value(
-				"Serienbrief Iterationsobjekt", it.name,
-				"variablen_werte", json.dumps(ovw) if ovw else "", update_modified=False,
-			)
+			it.variablen_werte = json.dumps(ovw) if ovw else ""
 
+	# Normal speichern statt db.set_value: die Änderungshistorie (track_changes) zeigt
+	# jede Korrektur mit Benutzer, altem und neuem Wert. Gerendert wird dabei nicht.
+	doc.flags.skip_auto_render = True
+	doc.save(ignore_permissions=True, ignore_version=False)
 	frappe.db.commit()
 	return {"ok": True}
 
