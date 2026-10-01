@@ -15,6 +15,7 @@ import {
   removeRecipients as apiRemoveRecipients,
   availableRecipients,
   mergedPdf,
+  downloadOffice,
   isNewMode,
   getVorlageParam,
   getDocname,
@@ -641,6 +642,11 @@ const DetailPane = ({ r, durchlauf, overrides, overrideCounts, onDownloadPdf, on
       <div className="dl-detail-footer">
         <button className="btn sm" onClick={onRun} disabled={running}><Icon name="refresh" size={12}/> Neu rendern</button>
         <button className="btn sm" onClick={() => onDownloadPdf && onDownloadPdf(r)} disabled={!r.pdf_url}><Icon name="download" size={12}/> PDF</button>
+        {durchlauf.office_export && ["docx", "odt"].map((format) => (
+          <button key={format} className="btn sm" onClick={() => downloadOffice(r.dokument, format)} disabled={!r.dokument || !["generated", "sent"].includes(r.status)} title={format === "docx" ? "Als bearbeitbares Word-Dokument herunterladen" : "Als bearbeitbares LibreOffice-Dokument herunterladen"}>
+            <Icon name="download" size={12}/> {format === "docx" ? "Word" : "ODT"}
+          </button>
+        ))}
         <button className="btn sm" disabled title="E-Mail-Versand kommt in Phase 2"><Icon name="send" size={12}/> Senden</button>
       </div>
     </aside>

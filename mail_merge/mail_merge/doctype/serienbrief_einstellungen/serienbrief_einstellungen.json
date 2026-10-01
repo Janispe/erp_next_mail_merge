@@ -14,6 +14,8 @@
   "column_break_margins",
   "margin_bottom",
   "margin_left",
+  "section_office_export",
+  "office_export_aktiv",
   "section_ui",
   "picker_modal_width_vw",
   "serienbrief_pdf_skip_dialog",
@@ -88,6 +90,18 @@
    "precision": "1"
   },
   {
+   "fieldname": "section_office_export",
+   "fieldtype": "Section Break",
+   "label": "Word-/LibreOffice-Export"
+  },
+  {
+   "default": "0",
+   "description": "Zeigt an Serienbrief Dokumenten und im Durchlauf-Viewer Buttons zum Herunterladen als Word (.docx) und LibreOffice (.odt). Braucht LibreOffice (soffice) im Backend-Image; Pfad optional über den Site-Config-Key mail_merge_soffice_path. Das gespeicherte PDF bleibt der maßgebliche Briefstand.",
+   "fieldname": "office_export_aktiv",
+   "fieldtype": "Check",
+   "label": "Word-/LibreOffice-Export aktivieren"
+  },
+  {
    "fieldname": "section_ui",
    "fieldtype": "Section Break",
    "label": "UI"
@@ -128,7 +142,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-06-18 00:00:00.000000",
+ "modified": "2026-10-01 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Mail Merge",
  "name": "Serienbrief Einstellungen",

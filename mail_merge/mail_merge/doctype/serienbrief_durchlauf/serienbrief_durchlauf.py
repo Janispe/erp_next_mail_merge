@@ -31,6 +31,7 @@ from mail_merge.mail_merge.utils.serienbrief_fonts import (
 from mail_merge.mail_merge.utils.jinja_source_sanitizer import sanitize_richtext_jinja_source
 from mail_merge.mail_merge.utils.brand_print import apply_print_saving_brand_assets
 from mail_merge.mail_merge.utils.letter_composer_state import input_fingerprint
+from mail_merge.mail_merge.utils.office_export import is_enabled as office_export_enabled
 from mail_merge.mail_merge.utils.render_inputs import RECORD_TYPES, context_fields, input_fields
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import read_file_url_bytes
 from mail_merge.mail_merge.utils.serienbrief_pdf_form import render_pdf_bytes_as_html_fragment
@@ -4368,6 +4369,7 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 		"date": cstr(doc.date) if doc.date else None,
 		"docstatus": int(getattr(doc, "docstatus", 0) or 0),
 		"supports_druck_schwarz_weiss": supports_druck_schwarz_weiss,
+		"office_export": office_export_enabled(),
 		"can_write": bool(frappe.has_permission("Serienbrief Durchlauf", "write", doc))
 		and int(getattr(doc, "docstatus", 0) or 0) == 0,
 		"can_submit": bool(frappe.has_permission("Serienbrief Durchlauf", "submit", doc))

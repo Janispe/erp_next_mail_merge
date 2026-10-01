@@ -88,6 +88,7 @@ export async function loadDurchlauf() {
 		can_write: !!d.can_write,
 		can_submit: !!d.can_submit,
 		supports_druck_schwarz_weiss: !!d.supports_druck_schwarz_weiss,
+		office_export: !!d.office_export,
 		counts: d.counts || {},
 		snapshot_state: d.snapshot_state || "unknown",
 		variables: (d.variables || []).map((v) => ({
@@ -182,6 +183,13 @@ export async function availableRecipients(query) {
 export async function searchRecords(doctype, query) {
 	if (!embedded) return { items: [], doctype };
 	return await rpc("record_search", { doctype: doctype || "", query: query || "" });
+}
+
+// Word-/LibreOffice-Export eines Serienbrief Dokuments (optional, siehe Serienbrief
+// Einstellungen). Direkter Download per GET wie beim PDF — kein RPC über die Bridge.
+export function downloadOffice(dokument, format) {
+	const query = new URLSearchParams({ dokument, format });
+	window.open(`/api/method/mail_merge.mail_merge.utils.office_export.download_dokument?${query}`, "_blank");
 }
 
 // Sammel-PDF aus den bereits generierten Dokumenten. → { file_url }.
