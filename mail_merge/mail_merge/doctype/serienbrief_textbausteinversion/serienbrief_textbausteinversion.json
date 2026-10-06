@@ -14,7 +14,9 @@
   "sealed",
   "restored_from",
   "content_hash",
-  "snapshot"
+  "snapshot",
+  "based_on",
+  "assistant_created"
  ],
  "fields": [
   {
@@ -45,7 +47,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Art",
-   "options": "Gespeichert\nAusgangsstand\nWiederherstellung\nImport\nSystemänderung"
+   "options": "Gespeichert\nAusgangsstand\nWiederherstellung\nImport\nSystemänderung\nKI-Erstellung\nKI-Vorschlag"
   },
   {
    "fieldname": "change_summary",
@@ -87,6 +89,20 @@
    "label": "Snapshot (JSON)",
    "read_only": 1,
    "reqd": 1
+  },
+  {
+   "fieldname": "based_on",
+   "fieldtype": "Link",
+   "label": "KI-Vorschlag basiert auf",
+   "options": "Serienbrief Textbausteinversion",
+   "read_only": 1
+  },
+  {
+   "fieldname": "assistant_created",
+   "fieldtype": "Check",
+   "label": "Vom Assistenten erstellt",
+   "default": "0",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,

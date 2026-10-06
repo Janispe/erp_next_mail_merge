@@ -12,6 +12,15 @@ from mail_merge.mail_merge.utils.serienbrief_pdf_form import extract_pdf_form_fi
 
 class SerienbriefTextbaustein(Document):
 	def validate(self):
+		previous = self.get_doc_before_save()
+		if previous and previous.get("assistant_created"):
+			self.assistant_created = 1
+		if self.get("assistant_created"):
+			from mail_merge.mail_merge.utils.assistant_templates import validate_assistant_source
+
+			if self.content_type != "HTML + Jinja":
+				frappe.throw(_("KI-Textbausteine müssen HTML + Jinja verwenden."))
+			validate_assistant_source(tbv.snapshot_content(self.as_dict()))
 		content_type = cstr(getattr(self, "content_type", None) or "").strip() or "Textbaustein (Rich Text)"
 		self.content_type = content_type
 		if content_type != "PDF Formular":

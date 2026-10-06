@@ -126,7 +126,7 @@ class TestSerienbriefVorlage(unittest.TestCase):
 			(frappe._dict(name="VERSION-3", source="Gespeichert", is_protected=0), "VERSION-3", "VERSION-1", set(), "aktuelle Stand"),
 			(frappe._dict(name="VERSION-1", source="Ausgangsstand", is_protected=0), "VERSION-3", "VERSION-1", set(), "Ausgangsstand"),
 			(frappe._dict(name="VERSION-2", source="Gespeichert", is_protected=1), "VERSION-3", "VERSION-1", set(), "Geschützte"),
-			(frappe._dict(name="VERSION-2", source="Gespeichert", is_protected=0), "VERSION-3", "VERSION-1", {"VERSION-2"}, "Ursprung"),
+			(frappe._dict(name="VERSION-2", source="Gespeichert", is_protected=0), "VERSION-3", "VERSION-1", {"VERSION-2"}, "Andere Versionen"),
 		)
 		for version, latest, first, referenced, message in cases:
 			with self.subTest(message=message):
@@ -256,7 +256,7 @@ class TestSerienbriefVorlage(unittest.TestCase):
 		self.assertNotIn("save", doc)
 
 	def test_save_marks_restored_origin_only_on_explicit_save(self):
-		version = frappe._dict(name="VERSION-1", version_number=1)
+		version = frappe._dict(name="VERSION-1", version_number=1, snapshot='{"doctype":"Serienbrief Vorlage","content_type":"Textbaustein (Rich Text)","content":"Alt","baustein_versionen":{}}')
 		doc = frappe._dict(
 			name="VORLAGE-1",
 			title="VORLAGE-1",

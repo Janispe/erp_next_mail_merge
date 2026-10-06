@@ -133,7 +133,7 @@ export async function loadTemplateVersionDraft(template, version) {
 	return toEditorTemplate(result);
 }
 
-export async function renderTemplateVersionPreview({ template, version, iterationDoctype, recipientId, druckSchwarzWeiss }) {
+export async function renderTemplateVersionPreview({ template, version, iterationDoctype, recipientId, druckSchwarzWeiss, previewValues, placeholderMode }) {
 	if (!embedded) return { pdf_base64: "", mode: "mock" };
 	return await versionRpc("version_preview", "render_editor_version_preview", {
 		template,
@@ -141,6 +141,8 @@ export async function renderTemplateVersionPreview({ template, version, iteratio
 		iteration_doctype: iterationDoctype || "",
 		iteration_objekt: recipientId || "",
 		druck_schwarz_weiss: druckSchwarzWeiss ? 1 : 0,
+		preview_values: JSON.stringify(previewValues || {}),
+		placeholder_mode: placeholderMode ? 1 : 0,
 	});
 }
 
@@ -356,6 +358,7 @@ export async function renderPreview({
 	bausteinKeys,
 	previewValues,
 	druckSchwarzWeiss,
+	placeholderMode,
 }) {
 	if (!embedded) return { pdf_base64: "", mode: "mock" };
 	// Live-Vorschau: aktueller (ungespeicherter) Editor-Stand wird serverseitig in-memory
@@ -410,4 +413,19 @@ export async function renderBausteinPreviews({
 		params.iteration_objekt = recipientId;
 	}
 	return await rpc("baustein_previews", params);
+}
+
+export async function groupTemplateVersions(template, versions) {
+	if (!embedded) return { head: versions.at(-1), members: versions.slice(0, -1), mock: true };
+	return await versionRpc("version_group", "group_editor_versions", { template, versions: JSON.stringify(versions) });
+}
+
+export async function ungroupTemplateVersions(template, version) {
+	if (!embedded) return { head: version, members: [], mock: true };
+	return await versionRpc("version_ungroup", "ungroup_editor_versions", { template, version });
+}
+
+export async function loadTemplateVersionUsage({ template, version, kind, offset = 0 }) {
+	if (!embedded) return { items: [], counts: { documents: 0, runs: 0 }, total: 0, has_more: false };
+	return await versionRpc("version_usage", "get_editor_version_usage", { template, version: version || "", kind, offset, limit: 20 });
 }

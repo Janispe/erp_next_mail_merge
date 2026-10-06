@@ -400,6 +400,15 @@ def _preprocess_simple_paths(
 
 
 def _render_serienbrief_template(template: str, context: Dict[str, Any]) -> str:
+	try:
+		return _render_serienbrief_template_inner(template, context)
+	except Exception as exc:
+		# Machine-readable location survives the human-facing Frappe wrappers.
+		exc.serienbrief_render_phase = "jinja"
+		raise
+
+
+def _render_serienbrief_template_inner(template: str, context: Dict[str, Any]) -> str:
 	"""Render templates for Serienbrief with clearer errors for missing fields.
 
 	Verwendet ``StrictUndefined`` statt Frappes Default ``ChainableUndefined``,
@@ -439,7 +448,14 @@ def _render_serienbrief_template(template: str, context: Dict[str, Any]) -> str:
 		finalize=finalize if callable(finalize) else _strict_finalize,
 	)
 	try:
-		return jenv.from_string(template).render(readonly_context(jenv, context))
+		fields = context.get("_serienbrief_placeholder_fields")
+		if fields:
+			from mail_merge.mail_merge.utils.preview_placeholders import placeholder_template
+
+			compiled = placeholder_template(jenv, template, fields)
+		else:
+			compiled = jenv.from_string(template)
+		return compiled.render(readonly_context(jenv, context))
 	except UndefinedError as exc:
 		raw = str(exc) or _("Ein benötigtes Feld fehlt.")
 		human = _humanize_jinja_error(raw)
@@ -1686,6 +1702,21 @@ class SerienbriefDurchlauf(Document):
 		*,
 		wrap_html: bool = True,
 	) -> Dict[str, Any] | None:
+		try:
+			return self._render_block_segment_inner(block_doc, context, wrap_html=wrap_html)
+		except Exception as exc:
+			# Keep the innermost block when a block invokes another block.
+			if not getattr(exc, "serienbrief_render_block", None):
+				exc.serienbrief_render_block = cstr(block_doc.name)
+			raise
+
+	def _render_block_segment_inner(
+		self,
+		block_doc,
+		context: Dict[str, Any],
+		*,
+		wrap_html: bool = True,
+	) -> Dict[str, Any] | None:
 		content_type = cstr(getattr(block_doc, "content_type", None) or "").strip() or "Textbaustein (Rich Text)"
 		if content_type == "PDF Formular":
 			pdf_bytes = render_pdf_form_block(block_doc, context, _resolve_value_path)
@@ -1720,6 +1751,15 @@ class SerienbriefDurchlauf(Document):
 			return ""
 
 		try:
+			if block_doc.get("assistant_created"):
+				from mail_merge.mail_merge.utils.assistant_templates import validate_assistant_source, validate_passive_html
+
+				validate_assistant_source(template_source)
+				context = frappe._dict(context)
+				context["_serienbrief_assistant_content"] = True
+				rendered = _render_serienbrief_template(template_source, context)
+				validate_passive_html(rendered)
+				return rendered
 			return _render_serienbrief_template(template_source, context)
 		except Exception as exc:
 			block_title = getattr(block_doc, "title", None) or getattr(block_doc, "name", None) or _("Textbaustein")
@@ -2728,6 +2768,10 @@ class _LinkResolvingRow:
 		object.__setattr__(self, "_meta", meta)
 
 	def __getattr__(self, key: str):
+		# Missing Python protocols must be absent, not synthetic None values.
+		# MarkupSafe probes __html__ before escaping a value and calls it if present.
+		if key.startswith("__"):
+			raise AttributeError(key)
 		source = object.__getattribute__(self, "_source")
 		meta = object.__getattribute__(self, "_meta")
 
@@ -2837,6 +2881,8 @@ class _LinkResolvingValue(str):
 		return doc
 
 	def __getattr__(self, key: str):
+		if key.startswith("__"):
+			raise AttributeError(key)
 		doc = self._get_doc()
 		if doc is None:
 			raise AttributeError(key)

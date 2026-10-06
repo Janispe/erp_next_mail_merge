@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { Icon } from "./Icon.jsx";
+import { PreviewFeedback, PreviewValueInput } from "./PreviewFeedback.jsx";
 import { loadPref, savePref } from "../persist.js";
 import { loadRecipients } from "../api.js";
 import {
@@ -33,11 +34,13 @@ function usePdfUrl(base64) {
 const PreviewPane = ({ template, recipient, recipients, onChangeRecipient, onSearchRecipients,
                        previewPdf, previewLoading, previewError, previewMode, onRefresh, onMaximize,
                        druckSchwarzWeiss, onDruckSchwarzWeissChange,
+                       placeholderMode, onPlaceholderModeChange,
                        variablesForPreview, previewVars, onPreviewVarChange }) => {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pvOpen, setPvOpen] = useState(true);
   const [q, setQ] = useState("");
   const pdfUrl = usePdfUrl(previewPdf);
+  const previewBlocked = !!previewError && (typeof previewError === "string" || previewError.ready === false);
 
   // Text-Variablen (keine Doctype-Pfad-Variablen) -> hier kann man für die Vorschau
   // testweise Werte setzen, ohne den gespeicherten Default zu verändern.
@@ -74,6 +77,12 @@ const PreviewPane = ({ template, recipient, recipients, onChangeRecipient, onSea
           <Icon name="maximize" size={13}/>
         </button>
       </div>
+
+      <label className="preview-placeholder-option">
+        <input type="checkbox" checked={!!placeholderMode} onChange={(event) => onPlaceholderModeChange?.(event.target.checked)}/>
+        Fehlende Eingaben als Variablennamen anzeigen
+      </label>
+      {!previewBlocked && previewError?.placeholder_mode && <PreviewFeedback report={previewError}/>}
 
       {pickerOpen && (
         <div style={{ borderBottom: "1px solid var(--border)", background: "var(--surface)", padding: 8, maxHeight: 320, overflow: "auto" }}>
@@ -125,13 +134,9 @@ const PreviewPane = ({ template, recipient, recipients, onChangeRecipient, onSea
               {textVars.map((v) => (
                 <label key={v.variable} className="pv-row">
                   <span className="pv-label" title={v.variable}>{v.label || v.variable}</span>
-                  <input
-                    className="pv-input"
-                    value={(previewVars && previewVars[v.variable]) || ""}
-                    placeholder={v.value ? `Standard: ${v.value}` : "Wert für Vorschau"}
-                    onChange={(e) => onPreviewVarChange && onPreviewVarChange(v.variable, e.target.value)}
-                    spellCheck={false}
-                  />
+                  <PreviewValueInput field={{ field: v.variable, label: v.label, type: v.type }}
+                    value={previewVars?.[v.variable]}
+                    onChange={(value) => onPreviewVarChange?.(v.variable, value)}/>
                 </label>
               ))}
             </div>
@@ -141,15 +146,13 @@ const PreviewPane = ({ template, recipient, recipients, onChangeRecipient, onSea
 
       <div className="preview-doc" style={{ position: "relative" }}>
         {previewLoading && <div className="editor-loading">PDF wird gerendert …</div>}
-        {!previewLoading && previewError && (
-          <div className="editor-loading" style={{ color: "var(--danger)", padding: 16, textAlign: "center" }}>
-            {previewError}
-          </div>
+        {!previewLoading && previewBlocked && (
+          <PreviewFeedback report={previewError}/>
         )}
-        {!previewLoading && !previewError && pdfUrl && (
+        {!previewLoading && !previewBlocked && pdfUrl && (
           <iframe title="PDF-Vorschau" src={pdfUrl} style={{ width: "100%", height: "100%", border: "none", minHeight: 420 }}/>
         )}
-        {!previewLoading && !previewError && !pdfUrl && (
+        {!previewLoading && !previewBlocked && !pdfUrl && (
           <div className="editor-loading">Noch keine Vorschau · „▶" zum Rendern.</div>
         )}
       </div>
@@ -1118,6 +1121,7 @@ export const Sidebar = ({
   onVariableAssignmentsChange, editable = true,
   druckSchwarzWeiss, onDruckSchwarzWeissChange,
   variablesForPreview, previewVars, onPreviewVarChange,
+  placeholderMode, onPlaceholderModeChange,
 }) => {
   // „Erweitert“ enthält jetzt bewusst auch die Standardfelder. Deshalb ist sein
   // Zähler bereits die Gesamtzahl und darf nicht mit Standard addiert werden.
@@ -1146,6 +1150,7 @@ export const Sidebar = ({
             template={template} recipient={recipient} recipients={recipients}
             onChangeRecipient={onChangeRecipient} onSearchRecipients={onSearchRecipients}
             previewPdf={previewPdf} previewLoading={previewLoading} previewError={previewError}
+            placeholderMode={placeholderMode} onPlaceholderModeChange={onPlaceholderModeChange}
             previewMode={previewMode} onRefresh={onRefreshPreview} onMaximize={onMaximizePreview}
             druckSchwarzWeiss={druckSchwarzWeiss}
             onDruckSchwarzWeissChange={onDruckSchwarzWeissChange}

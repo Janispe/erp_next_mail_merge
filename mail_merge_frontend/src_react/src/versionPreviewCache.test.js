@@ -10,7 +10,7 @@ describe("version preview cache", () => {
     await cache.load("context|v1", { version: "v1" });
 
     expect(render).toHaveBeenCalledTimes(1);
-    expect(cache.get("context|v1")).toBe("pdf-v1");
+    expect(cache.get("context|v1")).toEqual({ pdf_base64: "pdf-v1" });
   });
 
   it("deduplicates concurrent background and foreground requests", async () => {
@@ -23,7 +23,13 @@ describe("version preview cache", () => {
     await Promise.resolve();
     expect(render).toHaveBeenCalledTimes(1);
     finish({ pdf_base64: "pdf-v2" });
-    await expect(Promise.all([foreground, background])).resolves.toEqual(["pdf-v2", "pdf-v2"]);
+    await expect(Promise.all([foreground, background])).resolves.toEqual([{ pdf_base64: "pdf-v2" }, { pdf_base64: "pdf-v2" }]);
+  });
+
+  it("keeps diagnostics and discards PDFs from failed renders", async () => {
+    const errors = [{ code: "MISSING_INPUT", issues: [{ field: "stichtag" }] }];
+    const cache = createVersionPreviewCache(vi.fn().mockResolvedValue({ ready: false, pdf_base64: "error-pdf", errors }));
+    expect(await cache.load("v3", {})).toEqual({ ready: false, pdf_base64: "", errors });
   });
 
   it("separates recipient and print contexts", () => {

@@ -130,6 +130,37 @@ class TestRecordVariables(RecordFixtures):
 		self.assertFalse({f["name"]: f for f in input_fields(with_path, include_records=True)}["anwalt"]["required"])
 
 
+class TestLinkValueEscaping(unittest.TestCase):
+	def test_absent_html_protocol_does_not_resolve_link_or_claim_safe_html(self):
+		from markupsafe import escape
+
+		value = core._LinkResolvingValue("Contact", "<Anna & Test>")
+		with patch.object(frappe, "get_cached_doc") as load:
+			self.assertFalse(hasattr(value, "__html__"))
+			self.assertEqual(str(escape(value)), "&lt;Anna &amp; Test&gt;")
+			load.assert_not_called()
+
+	def test_document_row_escapes_its_name_and_does_not_expose_data_as_protocol(self):
+		from markupsafe import escape
+
+		value = core._LinkResolvingRow(frappe._dict(name="<Anna & Test>", __html__=lambda: "unsafe"))
+		self.assertFalse(hasattr(value, "__html__"))
+		self.assertEqual(str(escape(value)), "&lt;Anna &amp; Test&gt;")
+		self.assertEqual(value.get("name"), "<Anna & Test>")
+
+	def test_macro_with_linked_salutation_renders_in_assistant_mode(self):
+		person = frappe.get_doc({"doctype": "Contact", "first_name": "Anna &", "last_name": "<Test>", "salutation": "Frau"})
+		value = core._LinkResolvingRow(person)
+		# Contact.salutation is itself a Link. Both wrappers must report absent
+		# Python protocols as absent, even when the linked document exists.
+		with patch.object(frappe, "get_cached_doc", return_value=frappe._dict(doctype="Salutation", name="Frau")):
+			html = core._render_serienbrief_template(
+				"{% macro person_line(p) %}{{ p.get('salutation') ~ ' ' ~ p.get('first_name') ~ ' ' ~ p.get('last_name') }}{% endmacro %}{{ person_line(person) }}",
+				{"person": value, "_serienbrief_assistant_content": True},
+			)
+		self.assertEqual(html, "Frau Anna &amp; &lt;Test&gt;")
+
+
 class FakeTemplateDoc(frappe._dict):
 	def set(self, key, value):
 		self[key] = value

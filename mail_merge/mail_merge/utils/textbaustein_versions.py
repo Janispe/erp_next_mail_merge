@@ -145,6 +145,8 @@ SPEC = versioning.VersionSpec(
 	after_version_saved=_pin_pdf_file,
 	# autoname = format:{title}: der Titel IST der Name und wird nicht per Wiederherstellung umbenannt.
 	restore_skip_fields=("title",),
+	optional_scalar_fields=("assistant_created",),
+	non_live_sources=("KI-Vorschlag",),
 )
 
 
@@ -161,7 +163,7 @@ def create_textbaustein_version(doc, *, default_source: str = "Gespeichert"):
 
 def doc_from_snapshot(name: str, snapshot: Dict[str, Any]):
 	"""Ungespeicherter Baustein mit historischem Stand, fuer Vorschau-Renderings."""
-	values = {key: snapshot.get(key) for key in (*_SCALAR_FIELDS, *_CHILD_FIELDS) if key in snapshot}
+	values = {key: snapshot.get(key) for key in (*_SCALAR_FIELDS, *_CHILD_FIELDS, *SPEC.optional_scalar_fields) if key in snapshot}
 	doc = frappe.get_doc({"doctype": TEXTBAUSTEIN, **values})
 	doc.name = name
 	return doc

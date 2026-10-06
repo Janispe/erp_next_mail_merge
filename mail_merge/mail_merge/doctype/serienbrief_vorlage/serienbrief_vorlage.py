@@ -1497,7 +1497,7 @@ def _build_raw_template_html(template_doc) -> str:
 	return _wrap_preview_html("\n".join(html_blocks), template_doc=template_doc)
 
 
-def _build_split_preview_html(template_doc, druck_schwarz_weiss: bool = False) -> str:
+def _build_split_preview_html(template_doc, druck_schwarz_weiss: bool = False, diagnostics=None, placeholder_fields=None) -> str:
 	"""Rendert Beispielwerte durch denselben Segmentpfad wie einen echten Durchlauf.
 
 	Nur das Iterationsobjekt, Frappe-Zugriffe und fehlende Eingabewerte sind
@@ -1545,6 +1545,13 @@ def _build_split_preview_html(template_doc, druck_schwarz_weiss: bool = False) -
 		).items():
 			if key not in context or context.get(key) is None:
 				context[key] = value
+		from mail_merge.mail_merge.utils.preview_diagnostics import require_preview_inputs
+
+		if placeholder_fields is not None:
+			from mail_merge.mail_merge.utils.preview_placeholders import fill_preview_placeholders
+
+			placeholder_fields.extend(fill_preview_placeholders(template_doc, context))
+		require_preview_inputs(template_doc, context)
 
 		block_names: list[str] = []
 		for match in re.finditer(
@@ -1577,8 +1584,13 @@ def _build_split_preview_html(template_doc, druck_schwarz_weiss: bool = False) -
 			return ""
 		return durchlauf._render_segments_preview_html(segments)
 	except Exception as exc:
-		# Der PDF-Endpunkt soll bei einer unfertigen Vorlage weiterhin eine
-		# sichtbare rote Meldung liefern, nicht mit HTTP 500 abbrechen.
+		if diagnostics is not None:
+			from mail_merge.mail_merge.utils.preview_diagnostics import preview_error
+
+			diagnostics.append(preview_error(exc, template_doc))
+			return ""
+		# Legacy HTML-only consumers retain an inline error marker. PDF
+		# previews use the structured diagnostics branch above instead.
 		return (
 			'<div class="serienbrief-block serienbrief-content" data-block="standardtext">'
 			f"{_split_preview_error_marker(exc)}</div>"
@@ -1662,6 +1674,7 @@ def _render_segments_via_durchlauf(
 	iteration_doctype: str,
 	iteration_name: str,
 	druck_schwarz_weiss: bool = False,
+	placeholder_fields=None,
 ) -> str:
 	"""Baut für genau ein Zielobjekt den HTML-Body über den echten
 	SerienbriefDurchlauf-Render-Pfad: ``_get_iteration_rows`` → ``_build_context``
@@ -1717,9 +1730,8 @@ def _render_segments_via_durchlauf(
 
 	requirements = _collect_template_requirements(template_doc, iteration_doctype)
 
-	# strict_variables=False: Live-Preview soll auch laufen, wenn die Vorlage
-	# noch nicht fertig konfiguriert ist (fehlende Variablen werden im Final-
-	# Render geprüft). Sichtbar bleibt der unaufgelöste Platzhalter.
+	# Resolve first without an early generic missing-variable exception.
+	# The preflight below reports all open declared inputs together.
 	context = durchlauf._build_context(
 		rows[0],
 		index=1,
@@ -1728,6 +1740,13 @@ def _render_segments_via_durchlauf(
 		total=1,
 		strict_variables=False,
 	)
+	from mail_merge.mail_merge.utils.preview_diagnostics import require_preview_inputs
+
+	if placeholder_fields is not None:
+		from mail_merge.mail_merge.utils.preview_placeholders import fill_preview_placeholders
+
+		placeholder_fields.extend(fill_preview_placeholders(template_doc, context))
+	require_preview_inputs(template_doc, context)
 
 	segments = durchlauf._render_template_content(template_doc, context)
 	if not segments:
@@ -1745,7 +1764,8 @@ def render_template_preview_pdf(
 	iteration_objekt: str | None = None,
 	druck_schwarz_weiss: int | str = 0,
 	_skip_cache: bool = False,
-) -> Dict[str, str]:
+	placeholder_mode: int | str = 0,
+) -> Dict[str, Any]:
 	doc = _load_template_doc(template, template_doc)
 	_require_template_preview_permission(
 		doc,
@@ -1758,7 +1778,37 @@ def render_template_preview_pdf(
 		or cstr(getattr(doc, "haupt_verteil_objekt", "") or "").strip()
 	)
 	iter_name = cstr(iteration_objekt or "").strip()
+	from mail_merge.mail_merge.utils.preview_diagnostics import preview_error, preview_inputs
 
+	inputs = preview_inputs(doc)
+	from mail_merge.mail_merge.utils.preview_placeholders import placeholder_notice
+
+	use_placeholders = bool(cint(placeholder_mode))
+	if use_placeholders and not iter_name:
+		split_preview = True
+	placeholder_fields = [] if use_placeholders else None
+	preview_meta = {"placeholder_mode": use_placeholders, "placeholders": placeholder_fields or [],
+		"warnings": [placeholder_notice()] if use_placeholders else []}
+	errors = []
+	mode = "durchlauf" if iter_dt and iter_name else "split_preview" if split_preview else "raw"
+	if mode == "durchlauf":
+		try:
+			body = _render_segments_via_durchlauf(doc, iter_dt, iter_name, druck_schwarz_weiss=druck_sw, placeholder_fields=placeholder_fields)
+		except frappe.PermissionError:
+			raise
+		except Exception as exc:
+			errors.append(preview_error(exc, doc))
+	elif mode == "split_preview":
+		body = _build_split_preview_html(doc, druck_schwarz_weiss=druck_sw, diagnostics=errors, placeholder_fields=placeholder_fields)
+	preview_meta["placeholders"] = placeholder_fields or []
+	if errors:
+		return {**preview_meta, "ready": False, "pdf_base64": "", "mode": mode, "inputs": inputs, "errors": errors}
+	if mode != "raw" and not body:
+		return {**preview_meta, "ready": False, "pdf_base64": "", "mode": mode, "inputs": inputs,
+			"errors": [{"code": "EMPTY_DOCUMENT", "message": "Die Vorlage liefert keinen Briefinhalt.", "action": "review_template", "issues": []}]}
+
+	# Validate inputs and render source before trusting a cached PDF: older
+	# caches can contain a PDF of an error marker rather than a letter.
 	# Cache-Hit-Pfad: gespeicherte Vorlage + Split-Preview-Modus (kein konkreter
 	# Zielobjekt) + vorhandenes preview_pdf_file → File direkt zurückgeben, kein
 	# Live-Render. Invalidiert nur beim on_update der Vorlage (siehe
@@ -1769,7 +1819,7 @@ def render_template_preview_pdf(
 	# ``cint(split_preview)`` ist hier essenziell: ohne den Check würde ein
 	# Aufruf im Raw-Modus (split_preview=None/False) fälschlicherweise das
 	# Split-Preview-PDF (mit gelben Beispielwert-Highlights) ausliefern.
-	if not druck_sw and not _skip_cache and not iter_name and template and not template_doc and cint(split_preview):
+	if not use_placeholders and not druck_sw and not _skip_cache and not iter_name and template and not template_doc and cint(split_preview):
 		cached_file = cstr(getattr(doc, "preview_pdf_file", "") or "").strip()
 		if cached_file:
 			try:
@@ -1779,25 +1829,19 @@ def render_template_preview_pdf(
 				pdf_bytes = None
 			if pdf_bytes:
 				return {
+					**preview_meta,
+					"ready": True, "inputs": inputs, "errors": [],
 					"pdf_base64": base64.b64encode(pdf_bytes).decode("utf-8"),
 					"filename": f"vorlage-preview-{frappe.scrub(doc.name or doc.title or 'vorlage')}.pdf",
 					"mode": "cached",
 				}
 
-	mode: str
 	# Modus A: 1:1-Render mit echtem Zielobjekt über den Durchlauf-Pfad.
 	# Modus B: Split-Preview mit Beispielwerten, aber durch dieselbe Print-
 	# Format-Pipeline gewickelt (Footer/Watermark/Margins identisch).
 	if iter_dt and iter_name:
-		body = _render_segments_via_durchlauf(
-			doc,
-			iter_dt,
-			iter_name,
-			druck_schwarz_weiss=druck_sw,
-		)
 		mode = "durchlauf"
 	elif split_preview:
-		body = _build_split_preview_html(doc, druck_schwarz_weiss=druck_sw)
 		mode = "split_preview"
 		# Gelbe Hervorhebung der Beispielwerte (passt zur Optik im Quill-
 		# Editor, siehe ``_split_preview_finalize_value``). Wird nur in
@@ -1818,9 +1862,14 @@ def render_template_preview_pdf(
 			frappe.throw(_("Die Vorlage enthält keinen Inhalt."))
 		# Raw-Modus bleibt der alte CSS-Wrap (kein Print-Format) — wird über
 		# den ``Vorlage drucken``-Button aufgerufen, nicht im Live-Preview.
-		pdf_bytes = get_pdf(body)
+		try:
+			pdf_bytes = get_pdf(body)
+		except Exception as exc:
+			return {**preview_meta, "ready": False, "pdf_base64": "", "mode": "raw", "inputs": inputs, "errors": [preview_error(exc, doc, phase="pdf")]}
 		filename = f"vorlage-preview-{frappe.scrub(doc.name or doc.title or 'vorlage')}.pdf"
 		return {
+			**preview_meta,
+			"ready": True, "inputs": inputs, "errors": [],
 			"pdf_base64": base64.b64encode(pdf_bytes).decode("utf-8"),
 			"filename": filename,
 			"mode": "raw",
@@ -1829,20 +1878,28 @@ def render_template_preview_pdf(
 	if not body:
 		frappe.throw(_("Die Vorlage enthält keinen Inhalt."))
 
+	if use_placeholders:
+		body = ('<div style="position:fixed;top:0;right:0;z-index:100;'
+			'font-size:8pt;color:#755013;background:#fff3d7;padding:2px 6px;">'
+			'Layoutvorschau · Platzhalter · keine Prüfung mit echten Eingaben</div>' + body)
+
 	# docstatus=1 → kein DRAFT-Watermark im Preview. Doc ist ephemer, wird
 	# nie gespeichert; das ist nur für die Print-Pipeline-Wahrnehmung.
 	# is_mock=True nur im Split-Preview-Modus; im Durchlauf-Modus läuft der
 	# Footer-Helper mit echten Iterationsobjekt-Daten.
-	pdf_bytes = _render_through_serienbrief_dokument_print_format(
-		body,
-		doc,
-		docstatus=1,
-		iteration_doctype=iter_dt if mode == "durchlauf" else None,
-		iteration_name=iter_name if mode == "durchlauf" else None,
-		is_mock=(mode == "split_preview"),
-	)
+	try:
+		pdf_bytes = _render_through_serienbrief_dokument_print_format(
+			body, doc, docstatus=1,
+			iteration_doctype=iter_dt if mode == "durchlauf" else None,
+			iteration_name=iter_name if mode == "durchlauf" else None,
+			is_mock=(mode == "split_preview"),
+		)
+	except Exception as exc:
+		return {**preview_meta, "ready": False, "pdf_base64": "", "mode": mode, "inputs": inputs, "errors": [preview_error(exc, doc, phase="pdf")]}
 	filename = f"vorlage-preview-{frappe.scrub(doc.name or doc.title or 'vorlage')}.pdf"
 	return {
+		**preview_meta,
+		"ready": True, "inputs": inputs, "errors": [],
 		"pdf_base64": base64.b64encode(pdf_bytes).decode("utf-8"),
 		"filename": filename,
 		"mode": mode,
@@ -1862,7 +1919,8 @@ def render_editor_preview_pdf(
 	split_preview: bool | None = None,
 	preview_values: str | None = None,
 	druck_schwarz_weiss: int | str = 0,
-) -> Dict[str, str]:
+	placeholder_mode: int | str = 0,
+) -> Dict[str, Any]:
 	"""Live-Vorschau für den Editor: lädt die gespeicherte Vorlage, überschreibt Content/
 	Variablen/Baustein-Pfade **in-memory** (ohne zu speichern) mit dem aktuellen Editor-Stand
 	und rendert. So zeigt die Vorschau ungespeicherte Edits.
@@ -1894,17 +1952,12 @@ def render_editor_preview_pdf(
 		parsed_w = _parse_path_mapping(baustein_werte)
 		doc.inline_baustein_werte = frappe.as_json(parsed_w) if parsed_w else ""
 	# Transiente Vorschau-Werte über die (aus den Definitionen gebauten) Defaults legen.
-	if preview_values is not None:
-		pv = frappe.parse_json(preview_values)
-		if isinstance(pv, dict) and pv:
-			werte = frappe.parse_json(doc.variablen_werte) if doc.variablen_werte else {}
-			if not isinstance(werte, dict):
-				werte = {}
-			for raw_key, val in pv.items():
-				key = frappe.scrub(cstr(raw_key))
-				if key and val not in (None, ""):
-					werte[key] = {"value": val}
-			doc.variablen_werte = frappe.as_json(werte) if werte else ""
+	from mail_merge.mail_merge.utils.preview_diagnostics import PreviewInputError, apply_preview_values, preview_error, preview_inputs
+
+	try:
+		apply_preview_values(doc, preview_values)
+	except PreviewInputError as exc:
+		return {"ready": False, "pdf_base64": "", "mode": "input", "inputs": preview_inputs(doc), "errors": [preview_error(exc, doc)]}
 
 	return render_template_preview_pdf(
 		template_doc=doc.as_dict(),
@@ -1912,6 +1965,7 @@ def render_editor_preview_pdf(
 		iteration_objekt=iteration_objekt,
 		split_preview=split_preview,
 		druck_schwarz_weiss=druck_schwarz_weiss,
+		placeholder_mode=placeholder_mode,
 	)
 
 
@@ -2959,6 +3013,10 @@ def save_editor_template(
 	if new_title and new_title != cstr(doc.title).strip():
 		doc.title = new_title
 	if restored_version:
+		# A proposal/restoration includes per-template block fixations. Carry them
+		# over with its content; the shared blocks themselves are never restored.
+		snapshot = _parse_version_snapshot(restored_version.snapshot)
+		doc.baustein_versionen = snapshot.get("baustein_versionen")
 		if restored_version.get("assistant_created") or cstr(restored_version.get("source")).startswith("KI-"):
 			doc.assistant_created = 1
 		# Erst der explizite Speichervorgang erzeugt die neue Version samt Herkunftskante.
@@ -3010,11 +3068,34 @@ def get_editor_versions(template: str | None = None) -> Dict[str, Any]:
 		frappe.throw(_("Keine Berechtigung, die Versionshistorie zu lesen."), frappe.PermissionError)
 	if not _version_doctype_available():
 		return {"items": [], "current_hash": ""}
-	return versioning.list_versions(
+	from mail_merge.mail_merge.utils.template_history import enrich_history
+
+	return enrich_history(versioning.list_versions(
 		TEMPLATE_VERSION_SPEC,
 		frappe.get_doc("Serienbrief Vorlage", template_name),
 		evidence_names=_versions_used_by_documents(template_name),
-	)
+	), template_name)
+
+
+@frappe.whitelist()
+def group_editor_versions(template, versions):
+	from mail_merge.mail_merge.utils.template_history import group_versions
+
+	return group_versions(template, versions)
+
+
+@frappe.whitelist()
+def ungroup_editor_versions(template, version):
+	from mail_merge.mail_merge.utils.template_history import ungroup_versions
+
+	return ungroup_versions(template, version)
+
+
+@frappe.whitelist()
+def get_editor_version_usage(template, version=None, include_group=1, kind="documents", offset=0, limit=20):
+	from mail_merge.mail_merge.utils.template_history import version_usage
+
+	return version_usage(template, version, include_group=include_group, kind=kind, offset=offset, limit=limit)
 
 
 @frappe.whitelist()
@@ -3042,6 +3123,7 @@ def delete_editor_version(
 	template_name = cstr(template or "").strip()
 	if not template_name or not frappe.has_permission("Serienbrief Vorlage", "write", doc=template_name):
 		frappe.throw(_("Keine Berechtigung, Versionen dieser Vorlage zu löschen."), frappe.PermissionError)
+	frappe.db.get_value("Serienbrief Vorlage", template_name, "name", for_update=True)
 	version_doc = _require_template_version(cstr(version or "").strip(), template_name)
 	return versioning.delete_version(
 		TEMPLATE_VERSION_SPEC,
@@ -3100,7 +3182,9 @@ def render_editor_version_preview(
 	iteration_doctype: str | None = None,
 	iteration_objekt: str | None = None,
 	druck_schwarz_weiss: int | str = 0,
-) -> Dict[str, str]:
+	preview_values=None,
+	placeholder_mode: int | str = 0,
+) -> Dict[str, Any]:
 	"""PDF-nahe Vorschau eines historischen Snapshots ohne DB-Mutation.
 
 	Bausteine erscheinen im Stand der Stückliste dieser Version; Versionen ohne
@@ -3116,6 +3200,12 @@ def render_editor_version_preview(
 	snapshot = _parse_version_snapshot(version_doc.snapshot)
 	doc = frappe.get_doc("Serienbrief Vorlage", template_name)
 	_apply_template_snapshot(doc, snapshot)
+	from mail_merge.mail_merge.utils.preview_diagnostics import PreviewInputError, apply_preview_values, preview_error, preview_inputs
+
+	try:
+		apply_preview_values(doc, preview_values)
+	except PreviewInputError as exc:
+		return {"ready": False, "pdf_base64": "", "mode": "input", "inputs": preview_inputs(doc), "errors": [preview_error(exc, doc)]}
 	with pinned_textbausteine(pinned_docs_from_bill(version_doc.get("textbaustein_versionen"))):
 		return render_template_preview_pdf(
 			template_doc=doc.as_dict(),
@@ -3123,6 +3213,7 @@ def render_editor_version_preview(
 			iteration_objekt=cstr(iteration_objekt or "").strip() or None,
 			split_preview=not bool(cstr(iteration_objekt or "").strip()),
 			druck_schwarz_weiss=druck_schwarz_weiss,
+			placeholder_mode=placeholder_mode,
 		)
 
 

@@ -354,6 +354,7 @@ def version_metadata(version, *, current_hash: str = "", current_version: str = 
 		"protected": bool(cint(version.is_protected)),
 		"restored_from": cstr(version.restored_from or ""),
 		"based_on": cstr(version.get("based_on") or ""),
+		"history_group": cstr(version.get("history_group") or ""),
 		"assistant_created": bool(version.get("assistant_created")) or cstr(version.source).startswith("KI-"),
 		"is_proposal": version.source == "KI-Vorschlag",
 		"sealed": bool(cint(version.get("sealed"))),
@@ -383,8 +384,10 @@ def delete_block_reason(
 		return _("Der Ausgangsstand kann nicht gelöscht werden.")
 	if cint(version.is_protected):
 		return _("Geschützte Versionen müssen vor dem Löschen entsperrt werden.")
+	if version.get("history_group"):
+		return _("Bitte zunächst die Zusammenfassung dieser Version auflösen.")
 	if version.name in referenced_names:
-		return _("Diese Version ist Ursprung einer Wiederherstellung und bleibt für den Verlauf erforderlich.")
+		return _("Andere Versionen basieren auf diesem Stand oder verwenden ihn für eine Wiederherstellung.")
 	if version.name in evidence_names:
 		return _("Diese Version ist von einer Vorlage fixiert oder wurde für Serienbriefe verwendet und bleibt als Nachweis erhalten.")
 	return ""
@@ -394,7 +397,7 @@ def rows_with_delete_metadata(rows, *, current_hash: str, current_version: str, 
 	live = [row for row in rows if row.source not in non_live_sources]
 	latest_name = live[0].name if live else ""
 	first_name = live[-1].name if live else ""
-	referenced_names = {cstr(row.get(key)).strip() for row in rows for key in ("restored_from", "based_on") if row.get(key)}
+	referenced_names = {cstr(row.get(key)).strip() for row in rows for key in ("restored_from", "based_on", "history_group") if row.get(key)}
 	items = []
 	for row in rows:
 		item = version_metadata(row, current_hash=current_hash, current_version=current_version)
@@ -424,6 +427,7 @@ def list_versions(spec: VersionSpec, doc, *, evidence_names=frozenset()) -> Dict
 			"is_protected", "restored_from", "content_hash", "creation", "owner",
 			*(["based_on", "assistant_created"] if spec.non_live_sources else []),
 			*(["sealed"] if _has_seal(spec) else []),
+			*(["history_group"] if frappe.get_meta(spec.version_doctype).has_field("history_group") else []),
 		],
 		order_by="version_number desc",
 		limit_page_length=0,
@@ -456,7 +460,7 @@ def delete_version(spec: VersionSpec, version, owner_name: str, *, evidence_name
 	rows = frappe.get_all(
 		spec.version_doctype,
 		filters={spec.owner_field: owner_name},
-		fields=["name", "source", "is_protected", "restored_from", *(["based_on"] if spec.non_live_sources else [])],
+		fields=["name", "source", "is_protected", "restored_from", *(["based_on"] if spec.non_live_sources else []), *(["history_group"] if frappe.get_meta(spec.version_doctype).has_field("history_group") else [])],
 		order_by="version_number desc",
 		limit_page_length=0,
 	)
@@ -465,7 +469,7 @@ def delete_version(spec: VersionSpec, version, owner_name: str, *, evidence_name
 		version,
 		latest_name=live[0].name if live else "",
 		first_name=live[-1].name if live else "",
-		referenced_names={cstr(row.get(key)).strip() for row in rows for key in ("restored_from", "based_on") if row.get(key)},
+		referenced_names={cstr(row.get(key)).strip() for row in rows for key in ("restored_from", "based_on", "history_group") if row.get(key)},
 		evidence_names=evidence_names,
 	)
 	if reason:

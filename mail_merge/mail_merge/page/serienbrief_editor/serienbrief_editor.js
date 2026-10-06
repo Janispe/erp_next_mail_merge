@@ -37,6 +37,9 @@ const RPC_ACTIONS = {
 	version_restore: HV_SB + "restore_editor_version",
 	version_preview: HV_SB + "render_editor_version_preview",
 	version_compare: HV_SB + "compare_editor_version",
+	version_group: HV_SB + "group_editor_versions",
+	version_ungroup: HV_SB + "ungroup_editor_versions",
+	version_usage: HV_SB + "get_editor_version_usage",
 };
 
 // Navigations-Aktionen: kein frappe.call, sondern öffnen ein Desk-Formular. Werden

@@ -67,6 +67,7 @@ export const App = () => {
   const [previewMode, setPreviewMode] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
+  const [previewPlaceholderMode, setPreviewPlaceholderMode] = useState(false);
   const [druckSchwarzWeiss, setDruckSchwarzWeiss] = useState(false);
   const [bausteinLayoutMode, setBausteinLayoutMode] = useState(() => loadPref("bausteinLayoutMode", false));
   const [bausteinPreviewHtml, setBausteinPreviewHtml] = useState({});
@@ -671,6 +672,7 @@ export const App = () => {
       bausteinValues,
       bausteinKeys,
       previewVars,
+      previewPlaceholderMode,
       druckSchwarzWeiss,
     ]);
     if (!force && sig === previewSig.current) return;        // nichts geändert
@@ -691,10 +693,12 @@ export const App = () => {
         bausteinValues,
         bausteinKeys,
         previewValues: previewVars,
+        placeholderMode: previewPlaceholderMode,
         druckSchwarzWeiss,
       });
       setPreviewPdf(res.pdf_base64 || "");
       setPreviewMode(res.mode || "");
+      setPreviewError(res.ready === false || res.placeholder_mode ? res : "");
     } catch (e) {
       setPreviewError((e && e.message) || String(e));
       setPreviewPdf("");
@@ -704,7 +708,7 @@ export const App = () => {
       setPreviewLoading(false);
       if (previewPending.current) { previewPending.current = false; refreshPreview({ force: true }); }
     }
-  }, [template.id, template.haupt_verteil_objekt, recipient, variables, bausteinPaths, bausteinValues, bausteinKeys, previewVars, druckSchwarzWeiss]);
+  }, [template.id, template.haupt_verteil_objekt, recipient, variables, bausteinPaths, bausteinValues, bausteinKeys, previewVars, druckSchwarzWeiss, previewPlaceholderMode]);
 
   const refreshBausteinPreview = useCallback(async ({ force = false } = {}) => {
     if (!embedded || !template.id || !bausteinLayoutMode) return;
@@ -963,6 +967,8 @@ export const App = () => {
           previewLoading={previewLoading}
           previewError={previewError}
           previewMode={previewMode}
+          placeholderMode={previewPlaceholderMode}
+          onPlaceholderModeChange={setPreviewPlaceholderMode}
           onRefreshPreview={refreshPreview}
           druckSchwarzWeiss={druckSchwarzWeiss}
           onDruckSchwarzWeissChange={setDruckSchwarzWeiss}

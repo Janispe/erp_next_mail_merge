@@ -8,7 +8,7 @@ export function buildVersionGraph(items, allItems = items) {
   const visibleByName = new Map(items.map((item, index) => [item.name, index]));
   const allByName = new Map(allItems.map((item) => [item.name, item]));
   const nodes = items.map((item, index) => {
-    const originName = item.based_on || item.restored_from;
+    const originName = item.display_based_on || item.based_on || item.restored_from;
     const restoredFrom = originName ? allByName.get(originName) : null;
     return {
       item,
@@ -17,7 +17,7 @@ export function buildVersionGraph(items, allItems = items) {
     };
   });
   const restoreEdges = nodes.flatMap((node) => {
-    const originName = node.item.based_on || node.item.restored_from;
+    const originName = node.item.display_based_on || node.item.based_on || node.item.restored_from;
     const sourceIndex = visibleByName.get(originName);
     if (sourceIndex === undefined) return [];
     return [{
@@ -41,6 +41,8 @@ export const VersionHistoryGraph = ({
   onSelect,
   formatDate,
   displayUser,
+  expandedGroups = {},
+  onToggleGroup,
 }) => {
   const graph = buildVersionGraph(items, allItems);
   const firstY = graph.nodes[0]?.y || NODE_Y_OFFSET;
@@ -75,9 +77,9 @@ export const VersionHistoryGraph = ({
 
       <div className="version-graph-rows">
         {graph.nodes.map(({ item, restoredFromNumber }) => (
+          <div key={item.name} className="version-graph-row">
           <button
             type="button"
-            key={item.name}
             className={`version-graph-node ${selectedName === item.name ? "active" : ""}`}
             onClick={() => onSelect(item.name)}
             aria-label={`Version ${item.number}${item.is_current ? ", aktueller Stand" : ""}`}
@@ -99,6 +101,8 @@ export const VersionHistoryGraph = ({
               <span className="version-list-meta">{formatDate(item.created)} · {displayUser(item.created_by)}</span>
             </span>
           </button>
+          {!!item.group_members?.length && <button type="button" className="version-graph-group-toggle" onClick={() => onToggleGroup?.(item.name)} aria-label={`${expandedGroups[item.name] ? 'Zwischenstände ausblenden' : 'Zwischenstände einblenden'} bei Version ${item.number}`} title={`${item.group_members.length} Zwischenstände`} aria-expanded={!!expandedGroups[item.name]}>{expandedGroups[item.name] ? '−' : '+'}{item.group_members.length}</button>}
+          </div>
         ))}
       </div>
     </div>

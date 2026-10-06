@@ -8,6 +8,7 @@
  "engine": "InnoDB",
  "field_order": [
   "title",
+  "assistant_created",
   "content_type",
   "render_position",
   "text_content",
@@ -127,6 +128,13 @@
    "fieldname": "notizen_tab",
    "fieldtype": "Tab Break",
    "label": "Notizen"
+  },
+  {
+   "fieldname": "assistant_created",
+   "fieldtype": "Check",
+   "label": "Vom Assistenten erstellt",
+   "default": "0",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,

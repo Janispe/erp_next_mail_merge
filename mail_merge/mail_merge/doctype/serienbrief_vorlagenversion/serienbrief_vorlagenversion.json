@@ -17,7 +17,8 @@
   "restored_from",
   "content_hash",
   "snapshot",
-  "textbaustein_versionen"
+  "textbaustein_versionen",
+  "history_group"
  ],
  "fields": [
   {
@@ -111,6 +112,15 @@
    "label": "Vom Assistenten erstellt",
    "read_only": 1,
    "default": "0"
+  },
+  {
+   "fieldname": "history_group",
+   "fieldtype": "Link",
+   "options": "Serienbrief Vorlagenversion",
+   "label": "Zusammengefasst bei",
+   "read_only": 1,
+   "search_index": 1,
+   "description": "Darstellung in der Versionshistorie; Snapshot und Herkunft bleiben erhalten."
   }
  ],
  "index_web_pages_for_search": 0,

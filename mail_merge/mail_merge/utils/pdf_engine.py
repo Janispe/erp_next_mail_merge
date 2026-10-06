@@ -79,7 +79,7 @@ def render_pdf(html: str, options: dict[str, Any] | None = None) -> bytes:
 				None,
 				pdf_generator="chrome",
 			)
-		except Exception:
+		except Exception as exc:
 			needs_paged = _needs_paged_media(html)
 			frappe.log_error(
 				frappe.get_traceback(),
@@ -90,6 +90,13 @@ def render_pdf(html: str, options: dict[str, Any] | None = None) -> bytes:
 				# Wkhtmltopdf kann diese CSS-Features nicht — kein stiller
 				# Fallback. Brief wuerde sonst sichtbar kaputt
 				# (kein Footer, falsche Raender, falsche Page-Breaks).
+				exc.serienbrief_render_phase = "pdf"
+				exc.serienbrief_pdf_engine = "chrome"
 				raise
 
-	return _wk_get_pdf(html, options=options or {})
+	try:
+		return _wk_get_pdf(html, options=options or {})
+	except Exception as exc:
+		exc.serienbrief_render_phase = "pdf"
+		exc.serienbrief_pdf_engine = "wkhtmltopdf"
+		raise

@@ -20,9 +20,10 @@ export function createVersionPreviewCache(renderPreview) {
       const request = Promise.resolve()
         .then(() => renderPreview(params))
         .then((result) => {
-          const pdf = result?.pdf_base64 || "";
-          if (requestGeneration === generation) values.set(key, pdf);
-          return pdf;
+          const preview = { ...result, pdf_base64: result?.pdf_base64 || "" };
+          if (preview.ready === false) preview.pdf_base64 = "";
+          if (requestGeneration === generation) values.set(key, preview);
+          return preview;
         })
         .finally(() => {
           if (requests.get(key) === request) requests.delete(key);
