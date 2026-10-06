@@ -96,7 +96,7 @@ export async function loadDurchlauf() {
 			label: v.label,
 			type: v.type,
 			desc: v.desc,
-			default: v.default ?? "",
+			default: v.default,
 			value: v.value,
 			path: v.path,
 			reference_doctype: v.reference_doctype || "",

@@ -19,9 +19,11 @@ def context_fields(run=None):
 	return [{"name": "datum", "label": "Datum", "type": "Datum", "default": str((run.get("date") if run else None) or nowdate()), "required": False, "description": "Datum im Render-Kontext", "path": "datum", "aliases": ["datum_iso"]}]
 
 
-def input_fields(template, run=None, include_records=False):
+def input_fields(template, run=None, include_records=False, include_paths=False):
 	"""Eingaben der Vorlage. ``include_records`` nimmt Doctype-Variablen der Vorlage
-	(fest wählbarer Datensatz) auf; Clients ohne Datensatz-Auswahl lassen es aus."""
+	(fest wählbarer Datensatz) auf; Clients ohne Datensatz-Auswahl lassen es aus.
+	``include_paths`` bietet direkte Platzhalter-Pfade im Durchlauf-Editor an.
+	Der eingeschränkte Brief-Assistent erhält weiterhin nur deklarierte Eingaben."""
 	from mail_merge.mail_merge.doctype.serienbrief_durchlauf import serienbrief_durchlauf as core
 	fields = {f["name"]: f for f in context_fields(run)}
 	defaults = core._parse_variable_values(template.get("variablen_werte"))
@@ -69,4 +71,9 @@ def input_fields(template, run=None, include_records=False):
 			fields[path] = {"name": path, "path": path, "label": row.label or row.variable, "type": kind,
 				"default": value, "required": not bool(row.get("optional")), "description": row.get("beschreibung") or block.title or name}
 		queue += [(n, None) for n in core._extract_inline_block_names(core._get_textbaustein_template_source(block))]
+	if include_paths:
+		for path in core._collect_template_path_tokens(template):
+			if path not in fields:
+				fields[path] = {"name": path, "path": path, "label": path, "type": "String",
+					"default": None, "required": False, "direct_path": True, "description": "Wert aus dem Datenpfad der Vorlage"}
 	return list(fields.values())

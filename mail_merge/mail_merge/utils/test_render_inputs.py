@@ -80,3 +80,60 @@ class TestGenericRenderContext(unittest.TestCase):
 		self.assertEqual(str(result.eingang), "2026-09-21")
 		self.assertNotIn("outputs", result)
 		self.assertNotIn("termin", result)
+
+	def test_path_override_resolves_other_source_and_preserves_zero(self):
+		context = {"objekt": frappe._dict(bruttomiete=900, alternative=0), "_serienbrief_value_overrides": {"objekt.bruttomiete": {"path": "objekt.alternative"}}}
+		self.assertEqual(core._resolve_value_path("objekt.bruttomiete", context), 0)
+		self.assertIn("0", core._preprocess_simple_paths("{{$ objekt.bruttomiete $}}", context))
+
+	def test_invalid_and_circular_path_overrides_fail(self):
+		for mapping in [{"objekt.bruttomiete": {"path": "objekt.missing"}}, {"objekt.bruttomiete": {"path": "objekt.alternative"}, "objekt.alternative": {"path": "objekt.bruttomiete"}}]:
+			with self.subTest(mapping=mapping):
+				context = {"objekt": frappe._dict(bruttomiete=900, alternative=750), "_serienbrief_value_overrides": mapping}
+				with self.assertRaises(frappe.ValidationError):
+					core._resolve_value_path("objekt.bruttomiete", context)
+
+	def test_catalogue_includes_direct_placeholder_paths_only_when_requested(self):
+		template = frappe._dict(haupt_verteil_objekt="Example", content_type="HTML + Jinja", jinja_content="{{$ objekt.bruttomiete $}}", variables=[], textbausteine=[])
+		self.assertNotIn("objekt.bruttomiete", [f["name"] for f in input_fields(template)])
+		self.assertIn("objekt.bruttomiete", [f["name"] for f in input_fields(template, include_paths=True)])
+
+	def test_individual_path_replaces_common_value_for_template_variable(self):
+		run, context = self.run_context({"miete": 900})
+		context["objekt"]["alternative"] = 750
+		context["_serienbrief_value_overrides"]["miete"] = {"path": "objekt.alternative"}
+		template = frappe._dict(title="Example", name="T", variables=[frappe._dict(variable="miete", variable_type="Zahl")], variablen_werte=json.dumps({"miete": {"path": "objekt.missing"}}))
+		run._apply_template_variables(context, template)
+		self.assertEqual(context.miete, 750)
+
+	def test_save_preserves_common_and_individual_paths(self):
+		row = frappe._dict(objekt="ITEM")
+		doc = frappe._dict(docstatus=0, flags=frappe._dict(), iteration_objekte=[row], save=lambda **kwargs: None)
+		with patch.object(frappe, "get_doc", return_value=doc), patch.object(frappe, "has_permission", return_value=True), patch.object(core, "_record_input_fields", return_value={}), patch.object(frappe.db, "commit"):
+			core.set_run_variables("RUN", variables=[{"name": "objekt.bruttomiete", "value": {"path": "objekt.alternative"}}], per_recipient_overrides={"ITEM": {"objekt.bruttomiete": {"path": "objekt.individual"}, "zero": 0, "empty": "", "no": False}})
+		self.assertEqual(json.loads(doc.variablen_werte)["objekt.bruttomiete"], {"value": None, "path": "objekt.alternative"})
+		parsed = json.loads(row.variablen_werte)
+		self.assertEqual(parsed["objekt.bruttomiete"]["path"], "objekt.individual")
+		self.assertEqual(parsed["zero"]["value"], 0)
+		self.assertEqual(parsed["empty"]["value"], "")
+		self.assertIs(parsed["no"]["value"], False)
+
+	def test_individual_path_wins_in_actual_render_context(self):
+		run, _ = self.run_context()
+		run.variablen_werte = json.dumps({"objekt.bruttomiete": {"value": 900}})
+		row = frappe._dict(_iteration_doc=frappe._dict(name="ITEM", bruttomiete=1000, alternative=750), _iteration_variablen_werte=json.dumps({"objekt.bruttomiete": {"path": "objekt.alternative"}}))
+		context = run._build_context(row, 1)
+		self.assertEqual(core._preprocess_simple_paths("{{$ objekt.bruttomiete $}}", context), "750")
+
+	def test_empty_override_path_is_rejected(self):
+		with self.assertRaises(frappe.ValidationError):
+			core._parse_run_input_values({"objekt.bruttomiete": {"path": "  "}})
+
+	def test_override_path_checks_document_read_permission(self):
+		from frappe.model.document import Document
+		doc = Document({"doctype": "Contact", "name": "K-1", "first_name": "Ada"})
+		context = {"objekt": doc, "_serienbrief_value_overrides": {"miete": {"path": "objekt.first_name"}}}
+		with patch.object(doc, "check_permission", side_effect=frappe.PermissionError) as check:
+			with self.assertRaises(frappe.PermissionError):
+				core._resolve_value_path("miete", context)
+		check.assert_called_once_with("read")

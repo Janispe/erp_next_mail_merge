@@ -1991,7 +1991,7 @@ class SerienbriefDurchlauf(Document):
 					continue
 
 			entry = mapping.get(key) or {}
-			path = cstr(entry.get("path") or "").strip()
+			path = cstr((override or {}).get("path") or entry.get("path") or "").strip()
 			value = entry.get("value")
 			if variable_type in RECORD_TYPES:
 				# Ein fest gewählter Datensatz hat Vorrang vor Pfad und __self__.
@@ -2576,13 +2576,18 @@ def _apply_context_overrides(context, template=None, run=None):
 	fields = input_fields(template, run, include_records=True) if template else context_fields(run)
 	types = {field["name"]: field["type"] for field in fields}
 	context["_input_types"] = types
+	context_names = {field["name"] for field in context_fields(run)}
 	for key, entry in (context.get("_serienbrief_value_overrides") or {}).items():
-		if not _entry_has_explicit_value(entry) or key.startswith("_") or "." in key:
+		if key.startswith("_") or "." in key:
+			continue
+		if not _entry_has_explicit_value(entry) and key not in context_names:
 			continue
 		if types.get(key) in RECORD_TYPES:
 			# Datensatz-Namen lädt _apply_template_variables; hier kein Rohtext.
 			continue
-		context[key] = _coerce_context_value(entry["value"], types.get(key))
+		value = _get_value_override(context, key)
+		if value is not None:
+			context[key] = _coerce_context_value(value, types.get(key))
 	for field in context_fields(run):
 		for alias in field.get("aliases", []):
 			context[alias] = str(context.get(field["name"]) or "")
@@ -2608,6 +2613,16 @@ def _get_value_override(context: Dict[str, Any], key: str) -> Any:
 	entry = mapping.get(key)
 	if _entry_has_explicit_value(entry):
 		return entry.get("value")
+	path = cstr((entry or {}).get("path") or "").strip()
+	if path and path != key and path != key.removeprefix(PATH_OVERRIDE_PREFIX):
+		stack = context.get("_serienbrief_override_stack") or ()
+		if key in stack:
+			frappe.throw(_("Zirkuläre Serienbrief-Pfadzuordnung: {0}").format(" → ".join((*stack, key))))
+		nested = dict(context, _serienbrief_override_stack=(*stack, key), _serienbrief_check_path_permissions=True)
+		value = _resolve_value_path(path, nested)
+		if value is None:
+			frappe.throw(_("Überschriebener Serienbrief-Pfad {0} konnte nicht aufgelöst werden.").format(path))
+		return value
 	return None
 
 
@@ -2669,15 +2684,23 @@ def _collect_template_path_tokens(template) -> list[str]:
 				seen.add(path)
 				paths.append(path)
 
-	add_from_source(_get_template_template_source(template))
-	for row in template.get("textbausteine") or []:
-		if not getattr(row, "baustein", None):
+	source = _get_template_template_source(template)
+	add_from_source(source)
+	queue = [row.baustein for row in template.get("textbausteine") or [] if getattr(row, "baustein", None)]
+	queue += _extract_inline_block_names(source)
+	seen_blocks = set()
+	while queue:
+		name = queue.pop(0)
+		if name in seen_blocks:
 			continue
+		seen_blocks.add(name)
 		try:
-			block_doc = get_textbaustein(row.baustein, template=template)
-		except Exception:
+			block_doc = get_textbaustein(name, template=template)
+		except frappe.DoesNotExistError:
 			continue
-		add_from_source(_get_textbaustein_template_source(block_doc))
+		block_source = _get_textbaustein_template_source(block_doc)
+		add_from_source(block_source)
+		queue += _extract_inline_block_names(block_source)
 
 	return paths
 
@@ -3044,6 +3067,13 @@ def _resolve_value_path(path: str, context: Dict[str, Any]) -> Any:
 
 			if isinstance(current, _LinkResolvingRow):
 				current = object.__getattribute__(current, "_source")
+
+			if context.get("_serienbrief_check_path_permissions") and isinstance(current, Document):
+				if not frappe.get_meta(current.doctype).istable:
+					current.check_permission("read")
+				df = frappe.get_meta(current.doctype).get_field(segment)
+				if df and df.fieldtype == "Password":
+					raise frappe.PermissionError
 
 			if isinstance(current, dict):
 				doctype = current.get("doctype")
@@ -4304,7 +4334,7 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 
 	template_doc = doc._run_template() if doc.vorlage else None
 	input_definitions = (
-		input_fields(template_doc, doc, include_records=True) if template_doc else context_fields(doc)
+		input_fields(template_doc, doc, include_records=True, include_paths=True) if template_doc else context_fields(doc)
 	)
 	recipients: List[Dict[str, Any]] = []
 	overrides_out: Dict[str, Dict[str, Any]] = {}
@@ -4323,7 +4353,7 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 				row._iteration_variablen_werte = None
 				context = doc._build_context(row, len(recipients) + 1, template=template_doc, strict_variables=False)
 				for field in input_definitions:
-					value = _resolve_value_path(field["path"], context)
+					value = _resolve_value_path(field["name"], context)
 					if field["type"] in RECORD_TYPES:
 						# Datensätze als Namen anzeigen, wie sie auch gewählt werden.
 						value = _record_display_value(value)
@@ -4361,7 +4391,7 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 		ovw = _parse_variable_values(getattr(it, "variablen_werte", None))
 		if ovw:
 			overrides_out[objekt] = {
-				k: (e.get("value") if e.get("value") is not None else "") for k, e in ovw.items()
+				k: ({"path": e["path"]} if e.get("path") and e.get("value") is None else e.get("value")) for k, e in ovw.items()
 			}
 
 	# Variablen: Definition (Vorlage) + Default (Vorlage) + aktueller Durchlauf-Wert.
@@ -4376,7 +4406,7 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 		for field in input_definitions:
 			key = field["name"]
 			entry = global_values.get(key) or {}
-			value = entry.get("value") if entry.get("value") is not None else field["default"]
+			value = {"path": entry["path"]} if entry.get("path") and entry.get("value") is None else entry.get("value")
 			variables_out.append({"name": key, "label": field["label"], "type": field["type"], "desc": field["description"], "default": field["default"], "value": value, "path": field["path"], "reference_doctype": field.get("reference_doctype") or ""})
 		known_keys = {item["name"] for item in variables_out}
 		for assignment in template_doc.get("variablenbelegungen") or []:
@@ -4432,6 +4462,14 @@ def get_durchlauf_data(docname: str) -> Dict[str, Any]:
 	}
 
 
+def _parse_run_input_values(values):
+	for key, entry in values.items():
+		if isinstance(entry, dict) and "path" in entry:
+			if not isinstance(entry["path"], str) or not entry["path"].strip():
+				frappe.throw(_("Bitte geben Sie einen Feldpfad für {0} an.").format(key))
+	return _parse_variable_values(json.dumps(values))
+
+
 @frappe.whitelist()
 def set_run_variables(
 	docname: str, variables: str | list | dict | None = None, per_recipient_overrides: str | dict | None = None
@@ -4453,7 +4491,7 @@ def set_run_variables(
 		items = variables.items() if isinstance(variables, dict) else [
 			(v.get("name"), v.get("value")) for v in variables
 		]
-		vw = {cstr(k): {"value": val} for k, val in items if k and val is not None}
+		vw = _parse_run_input_values({cstr(k): val for k, val in items if k and val is not None})
 		_validate_record_inputs(vw, record_fields)
 		doc.variablen_werte = json.dumps(vw) if vw else ""
 
@@ -4463,7 +4501,7 @@ def set_run_variables(
 		for it in doc.get("iteration_objekte") or []:
 			objekt = cstr(getattr(it, "objekt", "") or "")
 			ov = (per_recipient_overrides or {}).get(objekt) or {}
-			ovw = {cstr(k): {"value": val} for k, val in ov.items() if val is not None}
+			ovw = _parse_run_input_values({cstr(k): val for k, val in ov.items() if val is not None})
 			_validate_record_inputs(ovw, record_fields)
 			it.variablen_werte = json.dumps(ovw) if ovw else ""
 

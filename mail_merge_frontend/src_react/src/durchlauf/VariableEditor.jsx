@@ -3,7 +3,8 @@ import { searchRecords } from "./api.js";
 
 const isRecord = v => v.type === "Doctype" || v.type === "Doctype Liste";
 const names = value => (Array.isArray(value) ? value : value ? [String(value)] : []).filter(Boolean);
-const display = value => value === true ? "Ja" : value === false ? "Nein" : Array.isArray(value) ? (value.length ? value.join(", ") : "(leer)") : value === "" || value == null ? "(leer)" : String(value);
+const isPath = value => value && typeof value === "object" && !Array.isArray(value) && typeof value.path === "string";
+const display = value => isPath(value) ? `Aus Pfad: ${value.path}` : value === true ? "Ja" : value === false ? "Nein" : Array.isArray(value) ? (value.length ? value.join(", ") : "(leer)") : value === "" || value == null ? "(leer)" : String(value);
 
 // Fester Datensatz (z. B. Kontakt der Kanzlei) für diesen Lauf bzw. Empfänger.
 // Leer = Vorgabe der Vorlage bzw. Pfad ab dem Objekt.
@@ -40,17 +41,33 @@ export function RecordField({ variable, value, disabled, onChange }) {
 export function VariableEditor({ variables, resolvedValues = {}, overrides = {}, individual = false, disabled, onChange, onReset }) {
   return <div className="dl-vars">{variables.map(v => {
     const own = individual && Object.hasOwn(overrides, v.name);
-    const inherited = v.value ?? (individual ? resolvedValues[v.name] : undefined);
+    const inherited = (isPath(v.value) && individual ? resolvedValues[v.name] : v.value) ?? v.default ?? (individual ? resolvedValues[v.name] : undefined);
     const value = own ? overrides[v.name] : inherited;
-    const props = { className: "dl-var-input", "aria-label": v.label || v.name, disabled, placeholder: v.path ? `Aus Pfad: ${v.path}` : "", value: value ?? "" };
+    const explicit = individual ? (own ? overrides[v.name] : undefined) : v.value;
+    const mode = isPath(explicit) ? "path" : explicit != null ? "value" : "default";
+    const props = { className: "dl-var-input", "aria-label": v.label || v.name, disabled, placeholder: v.path ? `Aus Pfad: ${v.path}` : "", value: isPath(value) ? "" : value ?? "" };
     return <div className={`dl-var ${own ? "dl-var-overridden" : ""}`} key={v.name}>
       <div className="dl-var-head"><span className="dl-var-name">{v.label || v.name}</span><span className="dl-var-type">{v.type}</span></div>
       {v.desc && <div className="dl-var-desc">{v.desc}</div>}
-      {individual && <div className="dl-variable-origin">{own ? "Individueller Wert" : "Gemeinsamer Wert"}</div>}
-      {isRecord(v) ? <RecordField variable={v} value={value} disabled={disabled} onChange={next => onChange(v.name, next)}/>
+      {individual && <div className="dl-variable-origin">{own ? "Individuelle Vorgabe" : isPath(v.value) ? `Gemeinsamer Pfad: ${v.value.path}` : "Gemeinsamer Wert"}</div>}
+      {!isRecord(v) && <label className="dl-var-desc">Quelle
+        <select className="dl-var-input" aria-label={`Quelle für ${v.label || v.name}`} disabled={disabled} value={mode}
+          onChange={e => {
+            if (e.target.value === "default") { if (individual) onReset(v.name); else onChange(v.name, undefined); }
+            else if (e.target.value === "path") onChange(v.name, { path: v.path || "" });
+            else onChange(v.name, isPath(value) ? "" : value ?? "");
+          }}>
+          <option value="default">{individual ? "Gemeinsame Vorgabe verwenden" : "Vorgabe der Vorlage verwenden"}</option>
+          <option value="value">Fester Wert</option><option value="path">Anderer Feldpfad</option>
+        </select>
+      </label>}
+      {!isRecord(v) && mode === "path" ? <input className="dl-var-input" aria-label={`Feldpfad für ${v.label || v.name}`} disabled={disabled} value={explicit.path}
+        placeholder="z. B. objekt.aktuelle_nettokaltmiete" onChange={e => onChange(v.name, { path: e.target.value })}/>
+        : isRecord(v) ? <RecordField variable={v} value={value} disabled={disabled} onChange={next => onChange(v.name, next)}/>
         : v.type === "Bool" ? <select {...props} value={value === true || value === 1 || value === "1" || value === "true" ? "true" : value === false || value === 0 || value === "0" || value === "false" ? "false" : ""} onChange={e => onChange(v.name, e.target.value === "" ? "" : e.target.value === "true")}><option value="">Nicht gesetzt</option><option value="true">Ja</option><option value="false">Nein</option></select>
         : v.type === "Text" ? <textarea {...props} rows={4} onChange={e => onChange(v.name, e.target.value)}/>
         : <input {...props} type={v.type === "Datum" ? "date" : "text"} inputMode={v.type === "Zahl" ? "decimal" : undefined} onChange={e => onChange(v.name, e.target.value)}/>}
+      {v.path && <div className="dl-var-desc">Vorlagenpfad: {v.path}</div>}
       {own && <div className="dl-variable-reset"><span>Für alle: {display(inherited)}</span><button type="button" disabled={disabled} onClick={() => onReset(v.name)}>Gemeinsamen Wert verwenden</button></div>}
     </div>;
   })}{!variables.length && <p>Keine ausfüllbaren Vorlagenvariablen vorhanden.</p>}</div>;
@@ -59,9 +76,9 @@ export function VariableEditor({ variables, resolvedValues = {}, overrides = {},
 export function VariableValues({ variables, resolvedValues = {}, overrides = {} }) {
   return <div className="dl-vars">{variables.map(v => {
     const own = Object.hasOwn(overrides, v.name);
-    const inherited = v.value ?? resolvedValues[v.name];
+    const inherited = v.value ?? v.default ?? resolvedValues[v.name];
     const value = own ? overrides[v.name] : inherited;
-    const origin = own ? "Individueller Wert" : v.value != null ? "Gemeinsamer Wert / Vorgabe" : "Aus Datenpfad";
+    const origin = own ? "Individuelle Vorgabe" : v.value != null ? "Gemeinsamer Wert / Vorgabe" : "Aus Datenpfad";
     const shown = v.type === "Datum" && /^\d{4}-\d{2}-\d{2}$/.test(value || "") ? value.split("-").reverse().join(".") : display(value);
     return <div className={`dl-var ${own ? "dl-var-overridden" : ""}`} key={v.name}>
       <div className="dl-var-head"><span className="dl-var-name">{v.label || v.name}</span><span className="dl-var-type">{v.type}</span></div>

@@ -10,6 +10,7 @@ vi.mock("./api.js", async original => {
     {name:'termin',label:'Termin',type:'Datum',value:'2026-10-01'},
     {name:'text',label:'Hinweistext',type:'Text',value:'Gemeinsam'},
     {name:'zeigen',label:'Hinweis anzeigen',type:'Bool',value:true},
+    {name:'objekt.bruttomiete',label:'Bruttomiete',type:'Zahl',path:'objekt.bruttomiete'},
   ] }, recipients: RECIPIENTS.slice(0,2), overrides: {} })) };
 });
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -38,4 +39,19 @@ it('speichert individuelle Datumswerte, leere Texte und Nein unabhängig von gem
   await act(async () => splitter.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true})));
   expect(splitter.getAttribute('aria-valuenow')).toBe('400');
   expect(host.querySelector('.dl-main').style.getPropertyValue('--dl-config-width')).toBe('400px');
+});
+
+it('speichert gemeinsame und individuelle Feldpfade als Pfadbelegung', async () => {
+  host=document.createElement('div');document.body.append(host);root=createRoot(host);
+  await act(async () => root.render(<App/>));
+  const left=host.querySelector('.dl-config');
+  await input(left.querySelector('[aria-label="Quelle für Bruttomiete"]'),'path');
+  await input(left.querySelector('[aria-label="Feldpfad für Bruttomiete"]'),'objekt.aktuelle_nettokaltmiete');
+  await act(async () => new Promise(resolve=>setTimeout(resolve,650)));
+  expect(saveVariables.mock.lastCall[0].find(v=>v.name==='objekt.bruttomiete').value).toEqual({path:'objekt.aktuelle_nettokaltmiete'});
+  await input(left.querySelector('.dl-variable-scope select'),'recipient');
+  await input(left.querySelector('[aria-label="Quelle für Bruttomiete"]'),'path');
+  await input(left.querySelector('[aria-label="Feldpfad für Bruttomiete"]'),'objekt.aktuelle_betriebskosten');
+  await act(async () => new Promise(resolve=>setTimeout(resolve,650)));
+  expect(saveVariables.mock.lastCall[1]['MV-2024-0142']['objekt.bruttomiete']).toEqual({path:'objekt.aktuelle_betriebskosten'});
 });
