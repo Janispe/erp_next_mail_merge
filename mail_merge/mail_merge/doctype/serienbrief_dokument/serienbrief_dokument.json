@@ -230,8 +230,11 @@
    "write": 1
   }
  ],
+ "search_fields": "title,objekt,durchlauf,vorlage",
+ "show_title_field_in_link": 1,
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
+ "title_field": "title",
  "track_changes": 1
 }
