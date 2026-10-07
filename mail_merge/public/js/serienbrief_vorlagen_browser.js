@@ -18,7 +18,7 @@ frappe.provide("mail_merge.serienbrief");
 // also direkt zum neuen React-Browser, ohne die List-View überhaupt zu mounten.
 // Die alte Baum-Page (serienbrief_vorlagenbaum) bleibt erreichbar als Escape
 // für Bausteine-Mapping etc.; die Standard-Form `/app/serienbrief-vorlage/<name>`
-// ist unverändert direkt aufrufbar.
+// leitet ihr Form-Skript in den Serienbrief Editor um (siehe serienbrief_vorlage.js).
 frappe.re_route = frappe.re_route || {};
 frappe.re_route["serienbrief-vorlage"] = "serienbrief_browser";
 

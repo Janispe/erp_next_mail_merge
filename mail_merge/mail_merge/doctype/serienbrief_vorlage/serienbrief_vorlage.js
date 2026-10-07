@@ -2448,8 +2448,25 @@ const hv_open_copy_dialog = (frm) => {
 	dialog.show();
 };
 
+// Die klassische Form wird nie angezeigt. Direkte Form-Links (Link-Felder, Suche,
+// "Zuletzt bearbeitet", Lesezeichen) greifen nicht über den Listen-Redirect:
+// bestehende Vorlagen → Serienbrief Editor, neue (ungespeicherte) → Vorlagen-Browser.
+const hv_redirect_away_from_form = (frm) => {
+	// History-Eintrag ersetzen, sonst führt "Zurück" wieder auf die Form → Redirect-Schleife.
+	frappe.route_flags.replace_route = true;
+	if (frm.is_new()) {
+		frappe.set_route("serienbrief_browser");
+		return;
+	}
+	frappe.route_options = { hv_serienbrief_template: frm.doc.name };
+	frappe.set_route("serienbrief_editor");
+};
+
 frappe.ui.form.on("Serienbrief Vorlage", {
 refresh(frm) {
+	// refresh statt onload: läuft auch bei gecachter Form.
+	hv_redirect_away_from_form(frm);
+	return;
 	frm._hv_placeholder_groups_cache = {};
 	hv_clear_placeholder_cache_if_needed();
 	frm.set_df_property("variables", "hidden", 1);

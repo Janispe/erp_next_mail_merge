@@ -42,7 +42,7 @@ const RPC_ACTIONS = {
 	version_usage: HV_SB + "get_editor_version_usage",
 };
 
-// Navigations-Aktionen: kein frappe.call, sondern öffnen ein Desk-Formular. Werden
+// Navigations-Aktionen: kein frappe.call, sondern öffnen eine Desk-Page/-Formular. Werden
 // vom iframe wie eine normale RPC-Aktion aufgerufen, aber hier abgefangen.
 const NAV_ACTIONS = {
 	// Neues "Serienbrief Durchlauf"-Formular mit vorausgewählter Vorlage. Die
@@ -51,13 +51,6 @@ const NAV_ACTIONS = {
 	new_durchlauf: (params) => {
 		frappe.route_options = { hv_vorlage: params.vorlage || undefined };
 		frappe.set_route("serienbrief_durchlauf_viewer");
-	},
-	// Escape-Hatch zur klassischen Form: nötig für den geführten Mapping-Wizard
-	// und Spezialfälle wie Mehrfach-Baustein-Mappings, die das alte Child-Table-
-	// Datenmodell (textbausteine[].pfad_zuordnung) abbildet, das Inline-Modell
-	// des neuen Editors aber nicht.
-	open_classic_form: (params) => {
-		if (params.vorlage) frappe.set_route("Form", "Serienbrief Vorlage", params.vorlage);
 	},
 	// "Zurück zur Liste"-Button im Editor-Header — springt zum neuen
 	// Vorlagen-Browser (Default-Einstieg seit Soft-Switch).

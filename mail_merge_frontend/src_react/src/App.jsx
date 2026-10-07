@@ -13,7 +13,7 @@ import { recordVariableRoots } from "./components/recordVariables.js";
 import { CURRENT_TEMPLATE, TEMPLATE_TREE } from "./data.js";
 import {
   loadTree, loadTemplate, saveTemplate, copyTemplate, deleteTemplate, openDurchlauf,
-  openClassicForm, openBrowser,
+  openBrowser,
   loadPlaceholderTree, openPlaceholderProfile, loadBausteine, loadRecipients, renderPreview,
   renderBausteinPreviews,
   loadEditorPrintFormatCss,
@@ -313,7 +313,7 @@ export const App = () => {
       }
       setVersionRefreshKey((value) => value + 1);
       // Return-Shape enthält die (ggf. umbenannte) neue ID + Titel, damit Caller
-      // wie handleOpenClassic/handleLoadDurchlauf nach `await save` die richtige ID
+      // wie handleLoadDurchlauf nach `await save` die richtige ID
       // benutzen koennen statt das stale `template.id` aus ihrer Closure.
       return { ok: true, id: res.id || template.id, title: res.title || title };
     } catch (e) {
@@ -428,28 +428,6 @@ export const App = () => {
       setLoadingTemplate(false);
     }
   }, [template.id, saving]);
-
-  // „Klassisch" -> Escape-Hatch zur Standard-Frappe-Form. Nötig für den
-  // geführten Mapping-Wizard und Spezialfälle (Mehrfach-Baustein-Mapping über
-  // das Alt-Datenmodell textbausteine[].pfad_zuordnung). Vor dem Verlassen
-  // anbieten zu speichern, damit ungespeicherte Edits nicht verloren gehen.
-  // Wichtig: Bei Titeländerung benennt das Backend um (autoname = format:{title}),
-  // die neue ID kommt aus dem save-Return; das stale `template.id` aus der
-  // useCallback-Closure ist dann veraltet und würde auf einen 404 führen.
-  const handleOpenClassic = useCallback(async () => {
-    if (!template.id) return;
-    let vorlageId = template.id;
-    if (dirty && template.canWrite) {
-      const res = await saveRef.current();
-      if (!res) return;
-      vorlageId = res.id || vorlageId;
-    }
-    try {
-      await openClassicForm({ vorlage: vorlageId });
-    } catch (e) {
-      alert("Klassische Form öffnen fehlgeschlagen: " + ((e && e.message) || e));
-    }
-  }, [template.id, template.canWrite, dirty]);
 
   // „In Serienbrief laden" -> neues Durchlauf-Formular im Desk öffnen, Vorlage
   // vorausgewählt. Der Durchlauf rendert aus dem gespeicherten Stand -> erst speichern.
@@ -914,9 +892,6 @@ export const App = () => {
         </button>
         <button className="btn ghost tb-danger" onClick={handleDelete} disabled={!template.id || !template.canWrite || copying || saving || deleting} title={!template.canWrite ? "Keine Berechtigung" : "Diese Vorlage löschen"}>
           <Icon name="trash" size={14}/> {deleting ? "Löscht …" : "Löschen"}
-        </button>
-        <button className="btn ghost" onClick={handleOpenClassic} disabled={!template.id || copying || saving || deleting} title="In klassischer Form öffnen (Mapping-Wizard, Spezialfälle)">
-          <Icon name="file" size={14}/> Klassisch
         </button>
         <button className="btn primary" onClick={handleLoadDurchlauf} disabled={!template.id || saving || deleting} title="Neuen Serienbrief-Durchlauf mit dieser Vorlage starten">
           <Icon name="send" size={14}/> In Serienbrief laden
