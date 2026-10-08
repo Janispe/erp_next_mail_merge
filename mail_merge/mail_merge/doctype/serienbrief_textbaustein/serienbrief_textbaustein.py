@@ -18,9 +18,14 @@ class SerienbriefTextbaustein(Document):
 		if self.get("assistant_created"):
 			from mail_merge.mail_merge.utils.assistant_templates import validate_assistant_source
 
-			if self.content_type != "HTML + Jinja":
-				frappe.throw(_("KI-Textbausteine müssen HTML + Jinja verwenden."))
-			validate_assistant_source(tbv.snapshot_content(self.as_dict()))
+			if self.content_type == "PDF Formular":
+				from mail_merge.mail_merge.utils.assistant_assets import validate_pdf_block
+
+				validate_pdf_block(self)
+			elif self.content_type == "HTML + Jinja":
+				validate_assistant_source(tbv.snapshot_content(self.as_dict()))
+			else:
+				frappe.throw(_("KI-Textbausteine müssen HTML + Jinja oder PDF Formular verwenden."))
 		content_type = cstr(getattr(self, "content_type", None) or "").strip() or "Textbaustein (Rich Text)"
 		self.content_type = content_type
 		if content_type != "PDF Formular":
