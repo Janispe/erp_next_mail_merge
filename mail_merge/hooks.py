@@ -18,11 +18,17 @@ jinja = {
 	],
 }
 
-after_migrate = [
-	"mail_merge.mail_merge.utils.placeholder_cache.bump_cache_version",
-	"mail_merge.install.ensure_serienbrief_settings_defaults",
+after_install = [
 	"mail_merge.install.ensure_serienbrief_print_format_link_field",
 	"mail_merge.install.ensure_serienbrief_dokument_print_format",
+	"mail_merge.install.ensure_serienbrief_settings_defaults",
+]
+
+after_migrate = [
+	"mail_merge.mail_merge.utils.placeholder_cache.bump_cache_version",
+	"mail_merge.install.ensure_serienbrief_print_format_link_field",
+	"mail_merge.install.ensure_serienbrief_dokument_print_format",
+	"mail_merge.install.ensure_serienbrief_settings_defaults",
 ]
 
 doc_events = {

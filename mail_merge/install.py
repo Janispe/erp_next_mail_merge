@@ -16,6 +16,7 @@ SERIENBRIEF_MARGIN_DEFAULTS: dict[str, float] = {
 }
 
 SERIENBRIEF_SETTINGS_DEFAULTS: dict[str, object] = {
+	"editor_print_format": "Serienbrief Dokument",
 	"picker_modal_width_vw": 92,
 	"serienbrief_pdf_skip_dialog": 1,
 	"serienbrief_pdf_default_format": "Serienbrief Dokument",

@@ -42,7 +42,6 @@
    "label": "PDF-Seitenränder (Serienbrief Dokument)"
   },
   {
-   "default": "Serienbrief Dokument",
    "description": "Print Format, dessen CSS im Serienbrief Editor für die gerenderte Baustein-Vorschau verwendet wird.",
    "fieldname": "editor_print_format",
    "fieldtype": "Link",
