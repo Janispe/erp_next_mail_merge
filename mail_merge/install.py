@@ -62,7 +62,14 @@ def ensure_serienbrief_dokument_print_format() -> None:
 
 
 def _ensure_serienbrief_dokument_print_format(*, reason: str) -> None:
-	"""Create/update the generic Print Format used for Serienbrief Dokument PDFs."""
+	"""Ensure a usable format without replacing a site's nonempty HTML.
+
+	Generated formats also use custom_format=1; there is no reliable marker to
+	distinguish an old default from an operator's layout. Keep all nonempty HTML,
+	including old defaults, and only populate empty/whitespace-only HTML with
+	the current default. Metadata repair remains independent of layout ownership.
+	Existing sites adopt newer default layouts by explicit operator choice.
+	"""
 
 	try:
 		if not frappe.db.exists("DocType", "Serienbrief Dokument"):
@@ -229,7 +236,7 @@ def _ensure_serienbrief_dokument_print_format(*, reason: str) -> None:
 			if int(getattr(doc, "custom_format", 0) or 0) != 1:
 				doc.custom_format = 1
 				changed = True
-			if (doc.html or "").strip() != html.strip():
+			if not (doc.html or "").strip():
 				doc.html = html
 				changed = True
 			if int(getattr(doc, "disabled", 0) or 0) != 0:
