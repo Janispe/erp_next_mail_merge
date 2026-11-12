@@ -19,6 +19,14 @@ _PATCHED_FLAG = "_hv_chrome_footer_patched"
 
 def apply() -> None:
 	"""Patch idempotent applizieren. Mehrfacher Aufruf hat keinen Effekt."""
+	import frappe
+	from packaging.version import Version
+
+	# Native Browser/PDFTransformer already compose the full page geometry.
+	# Applying the legacy workaround again enlarges footer-only pages.
+	if Version(frappe.__version__) >= Version("16.51.0"):
+		return
+
 	from frappe.utils.pdf_generator.browser import Browser
 	from frappe.utils.print_utils import convert_uom
 
