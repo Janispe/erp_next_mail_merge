@@ -1637,6 +1637,8 @@ def _render_through_serienbrief_dokument_print_format(
 	fragment = f'<div class="serienbrief-root">{page_wrapped}</div>'
 
 	ephemeral = frappe.new_doc("Serienbrief Dokument")
+	# Frappe requires a filename even for an unsaved print preview.
+	ephemeral.name = "Serienbrief-Vorschau"
 	ephemeral.html = fragment
 	ephemeral.vorlage = template_doc.name if template_doc else None
 	ephemeral.docstatus = int(docstatus or 0)
