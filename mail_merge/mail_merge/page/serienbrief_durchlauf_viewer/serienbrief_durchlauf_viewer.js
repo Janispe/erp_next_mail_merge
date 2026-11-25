@@ -23,6 +23,7 @@ const RPC_ACTIONS = {
 	submit_durchlauf: HV_DL + "submit_durchlauf",
 	set_variables: HV_DL + "set_run_variables",
 	add_recipients: HV_DL + "add_recipients",
+	add_filtered_recipients: HV_DL + "add_filtered_recipients",
 	remove_recipients: HV_DL + "remove_recipients",
 	available_recipients: HV_DL + "get_available_recipients",
 	// Fester Datensatz für Doctype-Variablen; listet nur Lesbares (frappe.get_list).

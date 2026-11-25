@@ -4513,28 +4513,30 @@ def set_run_variables(
 	return {"ok": True}
 
 
-@frappe.whitelist()
-def add_recipients(docname: str, objekte: str | list | None = None) -> Dict[str, Any]:
-	"""Iterations-Objekte zum Durchlauf hinzufügen (Duplikate werden ignoriert).
-
-	Sicherheit: nur existierende UND für den User lesbare Objekte werden aufgenommen —
-	sonst könnte ein User mit Schreibrecht auf den Durchlauf nicht-lesbare Ziel-Dokumente
-	rendern lassen und deren Daten über die erzeugten PDFs einsehen."""
-	doc = frappe.get_doc("Serienbrief Durchlauf", docname)
-	if not frappe.has_permission("Serienbrief Durchlauf", "write", doc):
-		raise frappe.PermissionError
-	if int(getattr(doc, "docstatus", 0) or 0) != 0:
+def _recipient_draft(docname):
+	doc = frappe.get_doc("Serienbrief Durchlauf", docname, for_update=True)
+	doc.check_permission("write")
+	if cint(doc.docstatus) != 0:
 		frappe.throw(_("Der Durchlauf ist bereits abgeschlossen (eingereicht)."))
+	return doc
+
+
+@frappe.whitelist(methods=["POST"])
+def add_recipients(docname: str, objekte: str | list | None = None) -> Dict[str, Any]:
+	"""Add explicit IDs after checking each object's read permission."""
+	from .recipient_selection import existing_recipients, iteration_doctype
+
+	doc = _recipient_draft(docname)
 	if isinstance(objekte, str):
 		objekte = json.loads(objekte or "[]")
+	if objekte is not None and not isinstance(objekte, list):
+		frappe.throw(_("Ungültige Empfängerauswahl."))
 
-	dt = cstr(doc.iteration_doctype or "").strip() or cstr(
-		frappe.db.get_value("Serienbrief Vorlage", doc.vorlage, "haupt_verteil_objekt") if doc.vorlage else ""
-	).strip()
+	dt = iteration_doctype(doc)
 	if not dt or not frappe.db.exists("DocType", dt):
 		frappe.throw(_("Bitte zuerst eine Vorlage mit gültigem Iterations-Doctype wählen."))
 
-	existing = {cstr(getattr(it, "objekt", "") or "") for it in doc.get("iteration_objekte") or []}
+	existing = existing_recipients(doc, dt)
 	rejected: list[str] = []
 	added = 0
 	for objekt in objekte or []:
@@ -4549,7 +4551,6 @@ def add_recipients(docname: str, objekte: str | list | None = None) -> Dict[str,
 		added += 1
 
 	if rejected:
-		# Atomar: nichts speichern, wenn ein Objekt nicht zulässig ist (klare Rückmeldung).
 		frappe.throw(
 			_("Diese Objekte können nicht hinzugefügt werden (nicht vorhanden oder keine Leseberechtigung): {0}").format(
 				", ".join(rejected)
@@ -4557,57 +4558,50 @@ def add_recipients(docname: str, objekte: str | list | None = None) -> Dict[str,
 			frappe.PermissionError,
 		)
 	if added:
-		doc.save(ignore_permissions=True)
+		doc.save()
 	return {"added": added}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
+def add_filtered_recipients(docname, filters, expected_count, query=None):
+	"""Re-evaluate the confirmed scope under the current user's permissions."""
+	from .recipient_selection import find_recipients, iteration_doctype
+
+	doc = _recipient_draft(docname)
+	items, skipped = find_recipients(doc, query=query, filters=filters, bulk=True)
+	if items and len(items) != cint(expected_count):
+		frappe.throw(_("Die Trefferanzahl hat sich geändert. Bitte prüfen und bestätigen Sie den Umfang erneut."))
+	dt = iteration_doctype(doc)
+	for item in items:
+		doc.append("iteration_objekte", {"iteration_doctype": dt, "objekt": item["id"]})
+	if items:
+		doc.flags.skip_auto_render = True
+		doc.save()
+	return {"added": len(items), "already_present": skipped}
+
+
+@frappe.whitelist(methods=["POST"])
 def remove_recipients(docname: str, objekte: str | list | None = None) -> Dict[str, Any]:
 	"""Iterations-Objekte aus dem Durchlauf entfernen."""
-	doc = frappe.get_doc("Serienbrief Durchlauf", docname)
-	if not frappe.has_permission("Serienbrief Durchlauf", "write", doc):
-		raise frappe.PermissionError
-	if int(getattr(doc, "docstatus", 0) or 0) != 0:
-		frappe.throw(_("Der Durchlauf ist bereits abgeschlossen (eingereicht)."))
+	doc = _recipient_draft(docname)
 	if isinstance(objekte, str):
 		objekte = json.loads(objekte or "[]")
 	remove = {cstr(o or "").strip() for o in (objekte or [])}
 	kept = [it for it in (doc.get("iteration_objekte") or []) if cstr(getattr(it, "objekt", "") or "") not in remove]
 	if len(kept) != len(doc.get("iteration_objekte") or []):
 		doc.set("iteration_objekte", kept)
-		doc.save(ignore_permissions=True)
+		doc.save()
 	return {"removed": True}
 
 
 @frappe.whitelist()
-def get_available_recipients(docname: str, query: str | None = None, limit: int = 25) -> Dict[str, Any]:
-	"""Iterations-Objekte, die noch nicht im Durchlauf sind (für „Objekt hinzufügen")."""
-	doc = frappe.get_doc("Serienbrief Durchlauf", docname)
-	if not frappe.has_permission("Serienbrief Durchlauf", "read", doc):
-		raise frappe.PermissionError
-	dt = cstr(doc.iteration_doctype or "").strip() or cstr(
-		frappe.db.get_value("Serienbrief Vorlage", doc.vorlage, "haupt_verteil_objekt") if doc.vorlage else ""
-	).strip()
-	if not dt or not frappe.db.exists("DocType", dt) or not frappe.has_permission(dt, "read"):
-		return {"items": [], "doctype": dt}
+def get_available_recipients(docname, query=None, limit=25, offset=0, sort="name_asc", filters=None):
+	"""Search and page readable recipient candidates for the run's iteration type."""
+	from .recipient_selection import find_recipients
 
-	already = {cstr(getattr(it, "objekt", "") or "") for it in doc.get("iteration_objekte") or []}
-	meta = frappe.get_meta(dt)
-	title_field = meta.get_title_field()
-	fields = ["name"] + ([title_field] if title_field and title_field != "name" else [])
-	q = cstr(query or "").strip()
-	or_filters = None
-	if q:
-		or_filters = [["name", "like", f"%{q}%"]]
-		if title_field and title_field != "name":
-			or_filters.append([title_field, "like", f"%{q}%"])
-	rows = frappe.get_list(dt, fields=fields, or_filters=or_filters, limit=cint(limit) or 25, order_by="modified desc")
-	items = [
-		{"id": r["name"], "label": (r.get(title_field) if title_field and title_field != "name" else None) or r["name"]}
-		for r in rows
-		if r["name"] not in already
-	]
-	return {"items": items, "doctype": dt}
+	doc = frappe.get_doc("Serienbrief Durchlauf", docname)
+	doc.check_permission("read")
+	return find_recipients(doc, query=query, limit=limit, offset=offset, sort=sort, filters=filters)
 
 
 @frappe.whitelist()

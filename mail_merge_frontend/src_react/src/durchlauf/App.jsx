@@ -14,6 +14,7 @@ import {
   addRecipients as apiAddRecipients,
   removeRecipients as apiRemoveRecipients,
   availableRecipients,
+  addFilteredRecipients,
   mergedPdf,
   downloadOffice,
   isNewMode,
@@ -409,59 +410,78 @@ const RecipientsList = ({ recipients, filter, onFilter, filterCounts, query, onQ
   );
 };
 
-const AddRecipientDialog = ({ open, doctype, selected, busy, onClose, onConfirm }) => {
+const RECIPIENT_PAGE_SIZE = 25;
+
+const AddRecipientDialog = ({ doctype, selected, busy, onClose, onConfirm }) => {
   const [query, setQuery] = useState("");
-  const [items, setItems] = useState([]);
+  const [sort, setSort] = useState("name_asc");
+  const [offset, setOffset] = useState(0);
+  const [filters, setFilters] = useState({});
+  const [result, setResult] = useState(null);
+  const [scope, setScope] = useState(null);
   const [checked, setChecked] = useState(() => new Set());
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [revision, setRevision] = useState(0);
+  const request = useMemo(() => ({ query, sort, offset, filters, revision }), [query, sort, offset, filters, revision]);
+  const current = result?.request === request ? result : null;
 
   useEffect(() => {
-    if (!open) return;
-    setQuery("");
-    setChecked(new Set());
-    setError("");
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    let alive = true;
-    setLoading(true);
-    const timer = setTimeout(() => {
-      availableRecipients(query)
-        .then((res) => {
-          if (!alive) return;
-          setItems(res.items || []);
-          setError("");
-        })
-        .catch((e) => {
-          if (!alive) return;
-          setItems([]);
-          setError(e?.message || "Objekte konnten nicht geladen werden.");
-        })
-        .finally(() => { if (alive) setLoading(false); });
+    let active = true;
+    const timer = setTimeout(async () => {
+      try {
+        const data = await availableRecipients(request);
+        if (active) {
+          setScope(data.scope);
+          setResult({ request, data });
+        }
+      } catch (e) {
+        if (active) setResult({ request, error: e?.message || "Objekte konnten nicht geladen werden." });
+      }
     }, 180);
     return () => {
-      alive = false;
+      active = false;
       clearTimeout(timer);
     };
-  }, [open, query]);
+  }, [request]);
+
+  const updateFilter = (name, value) => {
+    setOffset(0);
+    setFilters((previous) => ({ ...previous, [name]: value }));
+  };
 
   const toggle = (id) => {
-    setChecked((prev) => {
-      const next = new Set(prev);
+    setChecked((previous) => {
+      const next = new Set(previous);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   };
 
-  const add = () => {
-    const ids = Array.from(checked);
-    if (!ids.length) return;
-    onConfirm(ids);
+  const total = current?.data?.total || 0;
+  const leaseState = filters.lease_state || "on_date";
+  const date = filters.date ?? scope?.date ?? "";
+  const add = async (selection) => {
+    setError("");
+    try {
+      await onConfirm(selection);
+    } catch (e) {
+      setError(e?.message || "Hinzufügen fehlgeschlagen.");
+      setRevision((previous) => previous + 1);
+    }
   };
 
-  if (!open) return null;
+  const addFiltered = () => {
+    const label = current?.data?.scope_label;
+    if (!label || !total) return;
+    const confirmedFilters = scope?.date ? { ...filters, date, lease_state: leaseState } : filters;
+    const range = scope?.date
+      ? leaseState === "all" ? "\nAlle Vertragsstände (außer stornierten Verträgen)" : `\nGültig am ${date}`
+      : "";
+    const search = query.trim() ? `\nSuche „${query.trim()}“` : "";
+    if (window.confirm(`${total} Objekte hinzufügen?\n\n${label} (${filters.property}) einschließlich Unterknoten${range}${search}`)) {
+      add({ filtered: { filters: confirmedFilters, query, count: total } });
+    }
+  };
 
   return (
     <div className="dl-modal-backdrop" role="presentation" onMouseDown={onClose}>
@@ -469,43 +489,80 @@ const AddRecipientDialog = ({ open, doctype, selected, busy, onClose, onConfirm 
         <div className="dl-modal-head">
           <div>
             <div className="dl-modal-title" id="dl-add-recipient-title">Iterationsobjekte hinzufügen</div>
-            <div className="dl-modal-sub">{doctype || "Iterations-Doctype"} · bereits gewählte Objekte werden ausgeblendet</div>
+            <div className="dl-modal-sub">{doctype || "Iterations-Doctype"} · {selected} im Durchlauf</div>
           </div>
-          <button className="dl-modal-icon-btn" onClick={onClose} disabled={busy} title="Schließen"><Icon name="x" size={14}/></button>
+          <button className="dl-modal-icon-btn" onClick={onClose} disabled={busy} aria-label="Schließen"><Icon name="x" size={14}/></button>
         </div>
 
         <div className="dl-modal-search">
           <span className="dl-modal-search-icon"><Icon name="search" size={13}/></span>
-          <input autoFocus value={query} placeholder="Name oder Titel suchen…" onChange={(e) => setQuery(e.target.value)}/>
+          <input autoFocus aria-label="Name oder Titel suchen" value={query} disabled={busy} placeholder="Name oder Titel suchen…" onChange={(e) => {
+            setQuery(e.target.value);
+            setOffset(0);
+          }}/>
         </div>
+        <div className="dl-modal-filters">
+          <label>Sortierung
+            <select value={sort} disabled={busy} onChange={(e) => { setSort(e.target.value); setOffset(0); }}>
+              <option value="name_asc">Anzeigename aufsteigend</option>
+              <option value="name_desc">Anzeigename absteigend</option>
+              {scope && <>
+                <option value="location_asc">Immobilie und Wohnung aufsteigend</option>
+                <option value="location_desc">Immobilie und Wohnung absteigend</option>
+              </>}
+            </select>
+          </label>
+          {scope && <label>Immobilie oder Gebäudeteil
+            <select value={filters.property || ""} disabled={busy} onChange={(e) => updateFilter("property", e.target.value)}>
+              <option value="">Alle Immobilien</option>
+              {scope.properties.map(({ id, label }) => <option key={id} value={id}>{label === id ? label : `${label} (${id})`}</option>)}
+            </select>
+          </label>}
+          {scope?.date && <>
+            <label>Vertragsstand
+              <select value={leaseState} disabled={busy} onChange={(e) => updateFilter("lease_state", e.target.value)}>
+                <option value="on_date">Gültig am Stichtag</option>
+                <option value="all">Alle Vertragsstände</option>
+              </select>
+            </label>
+            <label>Stichtag
+              <input type="date" value={date} disabled={busy || leaseState === "all"} onChange={(e) => updateFilter("date", e.target.value || scope.date)}/>
+            </label>
+          </>}
+        </div>
+        {filters.property && <div className="dl-modal-scope">Ausgewählter Knoten einschließlich Unterknoten</div>}
 
-        <div className="dl-modal-list">
-          {loading ? (
+        <div className="dl-modal-list" aria-busy={!current}>
+          {!current ? (
             <div className="dl-modal-empty">Lade Objekte …</div>
-          ) : error ? (
-            <div className="dl-modal-error">{error}</div>
-          ) : items.length === 0 ? (
+          ) : current.error ? (
+            <div className="dl-modal-error" role="alert">{current.error}</div>
+          ) : !current.data.items.length ? (
             <div className="dl-modal-empty">Keine weiteren Objekte gefunden.</div>
-          ) : items.map((item) => {
-            const id = item.id || item.name;
-            const label = item.label || item.customer || id;
-            return (
-              <label className="dl-modal-row" key={id}>
-                <input type="checkbox" checked={checked.has(id)} onChange={() => toggle(id)}/>
-                <span className="dl-modal-row-main">
-                  <span className="dl-modal-row-title">{label}</span>
-                  <span className="dl-modal-row-sub">{id}{item.address ? ` · ${item.address}` : ""}</span>
-                </span>
-              </label>
-            );
-          })}
+          ) : current.data.items.map((item) => (
+            <label className="dl-modal-row" key={item.id}>
+              <input type="checkbox" disabled={busy} checked={checked.has(item.id)} onChange={() => toggle(item.id)}/>
+              <span className="dl-modal-row-main">
+                <span className="dl-modal-row-title">{item.label || item.customer || item.id}</span>
+                <span className="dl-modal-row-sub">{[item.id, ...(item.location || []), item.address].filter(Boolean).join(" · ")}</span>
+              </span>
+            </label>
+          ))}
         </div>
-
         <div className="dl-modal-actions">
-          <div className="dl-modal-count">{checked.size ? `${checked.size} ausgewählt` : `${selected} im Durchlauf`}</div>
-          <button className="btn" onClick={onClose} disabled={busy}>Abbrechen</button>
-          <button className="btn primary" onClick={add} disabled={busy || checked.size === 0}>
-            <Icon name="plus" size={13}/> {busy ? "Füge hinzu…" : "Hinzufügen"}
+          <span className="dl-modal-count" role="status">{total ? `${offset + 1}–${Math.min(offset + RECIPIENT_PAGE_SIZE, total)} von ${total} Treffern` : ""}</span>
+          <button className="btn" onClick={() => setOffset(offset - RECIPIENT_PAGE_SIZE)} disabled={busy || !current || !offset}>Zurück</button>
+          <button className="btn" onClick={() => setOffset(offset + RECIPIENT_PAGE_SIZE)} disabled={busy || offset + RECIPIENT_PAGE_SIZE >= total}>Weiter</button>
+        </div>
+        {error && <div className="dl-modal-error" role="alert">{error}</div>}
+        <div className="dl-modal-actions">
+          <div className="dl-modal-count" aria-live="polite">{checked.size} ausgewählt</div>
+          <button className="btn" onClick={() => setChecked(new Set())} disabled={busy || !checked.size}>Auswahl aufheben</button>
+          {scope && <button className="btn" onClick={addFiltered} disabled={busy || !current?.data?.scope_label || !total}>
+            Alle gefilterten hinzufügen
+          </button>}
+          <button className="btn primary" onClick={() => add({ ids: [...checked] })} disabled={busy || !checked.size}>
+            <Icon name="plus" size={13}/> Hinzufügen
           </button>
         </div>
       </div>
@@ -895,16 +952,16 @@ const DurchlaufApp = () => {
     setAddDialogOpen(true);
   }, [durchlaufMeta.can_write, busy]);
 
-  const onConfirmAddRecipients = useCallback(async (ids) => {
-    if (!ids.length) return;
+  const onConfirmAddRecipients = useCallback(async ({ ids, filtered }) => {
     setBusy(true);
     try {
       await flushVariableSave();
-      await apiAddRecipients(ids);
+      const result = filtered ? await addFilteredRecipients(filtered) : await apiAddRecipients(ids);
       setAddDialogOpen(false);
       await refresh();
-    } catch (e) {
-      window.alert(e?.message || "Hinzufügen fehlgeschlagen.");
+      if (filtered) {
+        window.alert(`${result.added} hinzugefügt · ${result.already_present} bereits im Durchlauf`);
+      }
     } finally {
       setBusy(false);
     }
@@ -990,14 +1047,13 @@ const DurchlaufApp = () => {
 
   return (
     <div className="durchlauf-app">
-      <AddRecipientDialog
-        open={addDialogOpen}
+      {addDialogOpen && <AddRecipientDialog
         doctype={durchlauf.iteration_doctype}
         selected={recipients.length}
         busy={busy}
         onClose={() => { if (!busy) setAddDialogOpen(false); }}
         onConfirm={onConfirmAddRecipients}
-      />
+      />}
       <Header
         durchlauf={durchlauf}
         stats={stats}
