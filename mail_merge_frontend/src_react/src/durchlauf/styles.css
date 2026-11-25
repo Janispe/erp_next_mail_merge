@@ -968,3 +968,33 @@
 .dl-var-overridden .dl-variable-origin{font-weight:600;color:var(--primary)}
 
 .dl-main-resizable .dl-recipients-head,.dl-main-resizable .dl-recipients-filters{flex-wrap:wrap}.dl-run-config summary{cursor:pointer}.dl-config .dl-section-title{font-size:12px}
+
+.dl-modal-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px 12px;
+  padding: 0 18px 8px;
+}
+.dl-modal-filters label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.dl-modal-filters select,
+.dl-modal-filters input {
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.dl-modal-scope {
+  padding: 0 18px 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.dl-modal-actions { flex-wrap: wrap; }

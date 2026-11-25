@@ -166,17 +166,26 @@ export async function removeRecipients(objekte) {
 	return await rpc("remove_recipients", { docname: getDocname(), objekte: JSON.stringify(objekte || []) });
 }
 
-export async function availableRecipients(query) {
+export async function availableRecipients({ query, sort, offset, filters }) {
 	if (!embedded) {
-		const q = (query || "").trim().toLowerCase();
-		const items = !q
-			? AVAILABLE
-			: AVAILABLE.filter((r) =>
-					[r.id, r.customer, r.address].some((v) => (v || "").toLowerCase().includes(q)),
-				);
-		return { items, doctype: DURCHLAUF.iteration_doctype };
+		const q = query.trim().toLowerCase();
+		const items = AVAILABLE.filter((row) =>
+			[row.id, row.customer].some((value) => (value || "").toLowerCase().includes(q)),
+		).sort((a, b) => {
+			const order = (a.customer || a.id).localeCompare(b.customer || b.id, "de");
+			return (sort === "name_desc" ? -order : order) || a.id.localeCompare(b.id);
+		});
+		return { items: items.slice(offset, offset + 25), total: items.length, doctype: DURCHLAUF.iteration_doctype };
 	}
-	return await rpc("available_recipients", { docname: getDocname(), query: query || "" });
+	return await rpc("available_recipients", {
+		docname: getDocname(), query, sort, offset, filters: JSON.stringify(filters),
+	});
+}
+
+export async function addFilteredRecipients({ query, filters, count }) {
+	return await rpc("add_filtered_recipients", {
+		docname: getDocname(), query, filters: JSON.stringify(filters), expected_count: count,
+	});
 }
 
 // Fester Datensatz für Doctype-Variablen: nur lesbare Datensätze. → { items: [{id,label}] }.
